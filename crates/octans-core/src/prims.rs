@@ -6,28 +6,31 @@
 use crate::registry::{Registry, TypeDescriptor};
 use crate::value::{RegisteredType, TypeId};
 
-pub const BOOL: TypeId = "octans.bool";
-pub const I32: TypeId = "octans.i32";
-pub const U32: TypeId = "octans.u32";
-pub const F32: TypeId = "octans.f32";
+macro_rules! prim {
+    ($($t:ty => $id:literal),+ $(,)?) => {
+        $(
+            impl RegisteredType for $t {
+                const ID: TypeId = $id;
+            }
+        )+
 
-impl RegisteredType for bool {
-    const ID: TypeId = BOOL;
-}
-impl RegisteredType for i32 {
-    const ID: TypeId = I32;
-}
-impl RegisteredType for u32 {
-    const ID: TypeId = U32;
-}
-impl RegisteredType for f32 {
-    const ID: TypeId = F32;
+        /// Register the built-in scalar types into a [`Registry`].
+        pub fn register_primitives(reg: &mut Registry) {
+            $(
+                reg.register_type(TypeDescriptor { id: <$t as RegisteredType>::ID, name: stringify!($t) });
+            )+
+        }
+    };
 }
 
-/// Register the built-in scalar types into a [`Registry`].
-pub fn register_primitives(reg: &mut Registry) {
-    reg.register_type(TypeDescriptor { id: BOOL, name: "bool" });
-    reg.register_type(TypeDescriptor { id: I32, name: "i32" });
-    reg.register_type(TypeDescriptor { id: U32, name: "u32" });
-    reg.register_type(TypeDescriptor { id: F32, name: "f32" });
+prim! {
+    bool => "octans.bool",
+    i32  => "octans.i32",
+    i64  => "octans.i64",
+    u8   => "octans.u8",
+    u16  => "octans.u16",
+    u32  => "octans.u32",
+    u64  => "octans.u64",
+    f32  => "octans.f32",
+    f64  => "octans.f64",
 }

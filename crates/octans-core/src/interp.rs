@@ -72,6 +72,14 @@ impl Mira {
                     }
                 }
             }
+            // Unconnected input ports fall back to their default (parameter behaviour).
+            for spec in graph.nodes[nid].inputs() {
+                if !inmap.contains_key(spec.name) {
+                    if let Some(d) = spec.default {
+                        inmap.insert(spec.name, d);
+                    }
+                }
+            }
 
             let inputs = Inputs { map: inmap };
             let mut outputs = Outputs::default();

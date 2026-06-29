@@ -74,8 +74,16 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     for it in &mut impl_block.items {
         if let ImplItem::Fn(f) = it {
             if f.sig.ident == "process" {
+                // Clone the signature WITH its `#[param]` attrs intact (we read defaults from
+                // them below), then rename the method and strip the attrs from the re-emitted
+                // copy — a custom attribute on a fn parameter would otherwise fail to compile.
                 sig = Some(f.sig.clone());
                 f.sig.ident = syn::Ident::new("__node_run", f.sig.ident.span());
+                for arg in f.sig.inputs.iter_mut() {
+                    if let FnArg::Typed(pt) = arg {
+                        pt.attrs.retain(|a| !a.path().is_ident("param"));
+                    }
+                }
             }
         }
     }
@@ -95,6 +103,7 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     // ---- inputs: each non-receiver param -> (name, element type) ----
     let mut in_names: Vec<String> = Vec::new();
     let mut in_types: Vec<Type> = Vec::new();
+    let mut in_defaults: Vec<Option<syn::Expr>> = Vec::new();
     for arg in sig.inputs.iter() {
         let FnArg::Typed(pt) = arg else { continue }; // skip &self
         let name = match &*pt.pat {
@@ -110,8 +119,26 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
             Type::Reference(r) => (*r.elem).clone(),
             other => other.clone(),
         };
+        // `#[param(default = <expr>)]` marks this input as a parameter with a fallback value.
+        let mut default = None;
+        for a in &pt.attrs {
+            if a.path().is_ident("param") {
+                match a.parse_args::<MetaNameValue>() {
+                    Ok(nv) if nv.path.is_ident("default") => default = Some(nv.value),
+                    _ => {
+                        return syn::Error::new_spanned(
+                            a,
+                            "#[param] expects `default = <expr>`",
+                        )
+                        .to_compile_error()
+                        .into()
+                    }
+                }
+            }
+        }
         in_names.push(name);
         in_types.push(elem);
+        in_defaults.push(default);
     }
 
     let out_ty: Option<Type> = match &sig.output {
@@ -120,9 +147,22 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // ---- generate fragments ----
-    let in_ports = in_names.iter().zip(in_types.iter()).map(|(n, t)| {
-        quote! { ::octans_core::PortSpec::new(#n, <#t as ::octans_core::RegisteredType>::type_spec()) }
-    });
+    let in_ports = in_names
+        .iter()
+        .zip(in_types.iter())
+        .zip(in_defaults.iter())
+        .map(|((n, t), default)| match default {
+            Some(expr) => quote! {
+                ::octans_core::PortSpec::with_default(
+                    #n,
+                    <#t as ::octans_core::RegisteredType>::type_spec(),
+                    ::octans_core::Value::new::<#t>(#expr),
+                )
+            },
+            None => quote! {
+                ::octans_core::PortSpec::new(#n, <#t as ::octans_core::RegisteredType>::type_spec())
+            },
+        });
 
     let outputs_method = match &out_ty {
         Some(t) => quote! {

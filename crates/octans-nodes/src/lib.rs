@@ -57,19 +57,20 @@ impl SyntheticCamera {
     }
 }
 
-/// Threshold an image into a binary (`0`/`255`) mask. `thr` will later become a writable
-/// parameter port so an optimizer node can tune it per camera.
-pub struct Threshold {
-    pub thr: u8,
-}
+/// Threshold an image into a binary (`0`/`255`) mask.
+///
+/// `thr` is a **parameter port** (default `128`): leave it unconnected and it uses the default,
+/// or wire an optimizer to it to drive it per camera at runtime.
+pub struct Threshold;
 
 #[node(id = "octans.std.threshold", out = "mask")]
 impl Threshold {
-    fn process(&self, image: &Image) -> Image {
+    fn process(&self, image: &Image, #[param(default = 128u8)] thr: &u8) -> Image {
+        let t = *thr;
         let px = image
             .px
             .iter()
-            .map(|&p| if p >= self.thr { 255 } else { 0 })
+            .map(|&p| if p >= t { 255 } else { 0 })
             .collect();
         Image { w: image.w, h: image.h, px }
     }

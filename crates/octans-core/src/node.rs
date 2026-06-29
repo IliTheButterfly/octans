@@ -12,12 +12,21 @@ use std::collections::HashMap;
 pub struct PortSpec {
     pub name: &'static str,
     pub ty: TypeSpec,
-    // Future: QoS / temporal contract (keep-last(N), reliable/best-effort, required/optional).
+    /// For input ports: the value used when nothing is connected. This is what turns an input
+    /// into a *parameter* — an optimizer can drive it via a connection, or it falls back to
+    /// this default. (A future QoS/temporal contract — keep-last(N), required/optional — will
+    /// live alongside this.)
+    pub default: Option<Value>,
 }
 
 impl PortSpec {
-    pub const fn new(name: &'static str, ty: TypeSpec) -> Self {
-        Self { name, ty }
+    pub fn new(name: &'static str, ty: TypeSpec) -> Self {
+        Self { name, ty, default: None }
+    }
+
+    /// An input port that falls back to `default` when unconnected (i.e. a parameter).
+    pub fn with_default(name: &'static str, ty: TypeSpec, default: Value) -> Self {
+        Self { name, ty, default: Some(default) }
     }
 }
 
@@ -53,6 +62,11 @@ pub struct Outputs {
 impl Outputs {
     pub fn set<T: Any + Send + Sync>(&mut self, port: &'static str, v: T) {
         self.map.insert(port, Value::new(v));
+    }
+
+    /// Set an output from an already-erased [`Value`] (used by portal/passthrough nodes).
+    pub fn set_value(&mut self, port: &'static str, v: Value) {
+        self.map.insert(port, v);
     }
 }
 

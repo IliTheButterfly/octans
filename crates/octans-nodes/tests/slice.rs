@@ -21,7 +21,7 @@ fn slice_runs_and_counts_blobs() {
         h: 128,
         blobs: vec![(30, 30, 8), (90, 40, 10), (60, 100, 6)],
     });
-    let thr = g.add(Threshold { thr: 128 });
+    let thr = g.add(Threshold); // thr param unconnected -> default 128
     let blob = g.add(BlobCount);
     let rep = g.add(Report { label: "cam0" });
 
