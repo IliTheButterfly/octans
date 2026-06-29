@@ -112,7 +112,7 @@ impl Graph {
         if !self.registry.is_registered(inp.ty.id) {
             return Err(ConnectError::UnregisteredType { id: inp.ty.id });
         }
-        if out.ty != inp.ty {
+        if !out.ty.compatible_with(&inp.ty) {
             return Err(ConnectError::TypeMismatch {
                 from_node: from,
                 from: out.ty,

@@ -83,7 +83,7 @@ impl Outputs {
 /// handed in as `local`, and shared globals via `ctx`.
 pub trait Node: Send + Sync {
     /// Stable node-type id, e.g. `"octans.std.threshold"`.
-    fn type_id(&self) -> &'static str;
+    fn node_type(&self) -> &'static str;
     fn inputs(&self) -> Vec<PortSpec>;
     fn outputs(&self) -> Vec<PortSpec>;
 

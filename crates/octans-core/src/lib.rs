@@ -16,6 +16,7 @@
 pub mod context;
 pub mod graph;
 pub mod interp;
+pub mod map;
 pub mod node;
 pub mod portal;
 pub mod prims;
@@ -25,6 +26,7 @@ pub mod value;
 pub use context::Context;
 pub use graph::{ConnectError, Graph, NodeId};
 pub use interp::{CompileError, Mira, Tick};
+pub use map::Map;
 pub use node::{Inputs, Node, Outputs, PortSpec};
 pub use portal::{Portal, PortalRead, PortalWrite};
 pub use prims::register_primitives;

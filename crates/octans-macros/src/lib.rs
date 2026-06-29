@@ -236,7 +236,7 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         #impl_block
 
         impl ::octans_core::Node for #self_ty {
-            fn type_id(&self) -> &'static str { #id }
+            fn node_type(&self) -> &'static str { #id }
             fn inputs(&self) -> ::std::vec::Vec<::octans_core::PortSpec> {
                 vec![ #( #in_ports ),* ]
             }

@@ -72,7 +72,7 @@ pub struct PortalRead {
 }
 
 impl Node for PortalRead {
-    fn type_id(&self) -> &'static str {
+    fn node_type(&self) -> &'static str {
         "octans.core.portal_read"
     }
     fn inputs(&self) -> Vec<PortSpec> {
@@ -100,7 +100,7 @@ pub struct PortalWrite {
 }
 
 impl Node for PortalWrite {
-    fn type_id(&self) -> &'static str {
+    fn node_type(&self) -> &'static str {
         "octans.core.portal_write"
     }
     fn inputs(&self) -> Vec<PortSpec> {

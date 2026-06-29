@@ -43,6 +43,20 @@ impl TypeSpec {
             shape: Shape::Vector(len),
         }
     }
+
+    /// Whether a value of type `self` may flow into a port expecting `other`. Same base type,
+    /// and compatible shapes: scalar↔scalar, or vector↔vector where an unknown length (`None`)
+    /// matches any, and known lengths must agree.
+    pub fn compatible_with(&self, other: &TypeSpec) -> bool {
+        if self.id != other.id {
+            return false;
+        }
+        match (&self.shape, &other.shape) {
+            (Shape::Scalar, Shape::Scalar) => true,
+            (Shape::Vector(a), Shape::Vector(b)) => a.is_none() || b.is_none() || a == b,
+            _ => false,
+        }
+    }
 }
 
 /// A type-erased, cheaply-clonable value handle.
@@ -66,6 +80,17 @@ impl Value {
     /// consumers shares the buffer rather than copying it.
     pub fn ref_count(&self) -> usize {
         Arc::strong_count(&self.0)
+    }
+
+    /// Wrap a list of element values as a single `Vector`-shaped value (the data behind a
+    /// `Shape::Vector` port — e.g. what a fan-out `Map` consumes/produces).
+    pub fn vector(items: Vec<Value>) -> Self {
+        Value::new(items)
+    }
+
+    /// Borrow this value as a vector of element values, if it is one.
+    pub fn as_vector(&self) -> Option<&Vec<Value>> {
+        self.downcast_ref::<Vec<Value>>()
     }
 }
 
