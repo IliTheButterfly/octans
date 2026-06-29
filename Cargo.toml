@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/IliTheButterfly/octans"
+
+[workspace.dependencies]
+# Shared, version-pinned deps land here as crates are added.
+# (target: petgraph for topology, opencv as a std-node dep, wgpu for the GPU backend, etc.)
