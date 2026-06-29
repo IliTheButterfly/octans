@@ -5,8 +5,9 @@
 //! (`IncompatibleTypes` was defined but never enforced). Here it is enforced from day one.
 
 use crate::node::{Node, PortSpec};
+use crate::portal::Portal;
 use crate::registry::Registry;
-use crate::value::TypeSpec;
+use crate::value::{TypeSpec, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NodeId(pub usize);
@@ -36,16 +37,26 @@ pub struct Graph {
     pub(crate) registry: Registry,
     pub(crate) nodes: Vec<Box<dyn Node>>,
     pub(crate) edges: Vec<Edge>,
+    pub(crate) portals: Vec<Portal>,
 }
 
 impl Graph {
     pub fn new(registry: Registry) -> Self {
-        Self { registry, nodes: Vec::new(), edges: Vec::new() }
+        Self { registry, nodes: Vec::new(), edges: Vec::new(), portals: Vec::new() }
     }
 
     pub fn add(&mut self, node: impl Node + 'static) -> NodeId {
         self.nodes.push(Box::new(node));
         NodeId(self.nodes.len() - 1)
+    }
+
+    /// Create a temporal feedback slot (z⁻¹). Use the returned [`Portal`] to make matching
+    /// reader/writer nodes (`portal.reader(..)` / `portal.writer(..)`); the interpreter swaps
+    /// it at each tick boundary so reads see the previous tick's write.
+    pub fn add_portal(&mut self, ty: TypeSpec, initial: Value) -> Portal {
+        let p = Portal::new(ty, initial);
+        self.portals.push(p.clone());
+        p
     }
 
     fn output_spec(&self, n: NodeId, port: &str) -> Option<PortSpec> {

@@ -90,6 +90,11 @@ impl Mira {
             }
         }
 
+        // Tick boundary: promote each portal's write to be next tick's read.
+        for portal in &graph.portals {
+            portal.swap();
+        }
+
         Tick { latency: start.elapsed(), store }
     }
 }

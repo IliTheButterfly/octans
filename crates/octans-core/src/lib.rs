@@ -16,6 +16,7 @@
 pub mod graph;
 pub mod interp;
 pub mod node;
+pub mod portal;
 pub mod prims;
 pub mod registry;
 pub mod value;
@@ -23,6 +24,7 @@ pub mod value;
 pub use graph::{ConnectError, Graph, NodeId};
 pub use interp::{CompileError, Mira, Tick};
 pub use node::{Inputs, Node, Outputs, PortSpec};
+pub use portal::{Portal, PortalRead, PortalWrite};
 pub use prims::register_primitives;
 pub use registry::{Registry, TypeDescriptor};
 pub use value::{RegisteredType, Shape, TypeId, TypeSpec, Value};
