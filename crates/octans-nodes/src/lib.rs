@@ -121,6 +121,27 @@ impl BlobCount {
     }
 }
 
+/// A proportional optimizer: nudges a threshold toward whatever value yields `target` blobs.
+///
+/// It is a *pure* node — its only state (the previous threshold) is fed back explicitly through
+/// a portal, not held internally. Wire it as a feedback loop:
+/// `BlobCount.count ─portal→ count`, `thr ─portal→ prev_thr`, and `thr → Threshold.thr`.
+pub struct AutoThreshold {
+    pub target: u32,
+    pub gain: i32,
+    pub min: u8,
+    pub max: u8,
+}
+
+#[node(id = "octans.std.auto_threshold", out = "thr")]
+impl AutoThreshold {
+    fn process(&self, count: &u32, prev_thr: &u8) -> u8 {
+        let err = *count as i32 - self.target as i32; // >0: too many blobs -> raise threshold
+        let next = *prev_thr as i32 + self.gain * err;
+        next.clamp(self.min as i32, self.max as i32) as u8
+    }
+}
+
 /// A sink: prints the blob count. (Later: a viewer / a boundary output of the embedded graph.)
 pub struct Report {
     pub label: &'static str,
