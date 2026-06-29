@@ -21,12 +21,20 @@ pub struct PortSpec {
 
 impl PortSpec {
     pub fn new(name: &'static str, ty: TypeSpec) -> Self {
-        Self { name, ty, default: None }
+        Self {
+            name,
+            ty,
+            default: None,
+        }
     }
 
     /// An input port that falls back to `default` when unconnected (i.e. a parameter).
     pub fn with_default(name: &'static str, ty: TypeSpec, default: Value) -> Self {
-        Self { name, ty, default: Some(default) }
+        Self {
+            name,
+            ty,
+            default: Some(default),
+        }
     }
 }
 

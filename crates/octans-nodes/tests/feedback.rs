@@ -27,7 +27,12 @@ fn optimizer_self_corrects_threshold_to_hit_target() {
     });
     let thr_node = g.add(Threshold);
     let blob = g.add(BlobCount);
-    let opt = g.add(AutoThreshold { target: 3, gain: 5, min: 0, max: 255 });
+    let opt = g.add(AutoThreshold {
+        target: 3,
+        gain: 5,
+        min: 0,
+        max: 255,
+    });
 
     let count_r = g.add(p_count.reader("count"));
     let count_w = g.add(p_count.writer("count"));
@@ -51,13 +56,26 @@ fn optimizer_self_corrects_threshold_to_hit_target() {
     let mut thrs = Vec::new();
     for _ in 0..8 {
         let tick = engine.run_tick(&g);
-        counts.push(tick.output(blob, "count").and_then(|v| v.downcast_ref::<u32>()).copied().unwrap());
-        thrs.push(tick.output(opt, "thr").and_then(|v| v.downcast_ref::<u8>()).copied().unwrap());
+        counts.push(
+            tick.output(blob, "count")
+                .and_then(|v| v.downcast_ref::<u32>())
+                .copied()
+                .unwrap(),
+        );
+        thrs.push(
+            tick.output(opt, "thr")
+                .and_then(|v| v.downcast_ref::<u8>())
+                .copied()
+                .unwrap(),
+        );
     }
     eprintln!("blob counts per tick: {counts:?}");
     eprintln!("thresholds per tick:  {thrs:?}");
 
-    assert_ne!(counts[0], 3, "must start off-target (threshold too high to see any blob)");
+    assert_ne!(
+        counts[0], 3,
+        "must start off-target (threshold too high to see any blob)"
+    );
     assert_eq!(
         *counts.last().unwrap(),
         3,

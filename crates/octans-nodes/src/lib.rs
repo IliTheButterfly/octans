@@ -27,7 +27,10 @@ impl RegisteredType for Image {
 /// Register the standard node-library types into a [`Registry`].
 /// (Primitives like `u32` are registered separately via `octans_core::register_primitives`.)
 pub fn register_node_types(reg: &mut Registry) {
-    reg.register_type(TypeDescriptor { id: T_IMAGE, name: "Image (grayscale, u8)" });
+    reg.register_type(TypeDescriptor {
+        id: T_IMAGE,
+        name: "Image (grayscale, u8)",
+    });
 }
 
 /// A source: emits a frame with known bright disks on a dim background. A *known* blob count
@@ -53,7 +56,11 @@ impl SyntheticCamera {
                 }
             }
         }
-        Image { w: self.w, h: self.h, px }
+        Image {
+            w: self.w,
+            h: self.h,
+            px,
+        }
     }
 }
 
@@ -72,7 +79,11 @@ impl Threshold {
             .iter()
             .map(|&p| if p >= t { 255 } else { 0 })
             .collect();
-        Image { w: image.w, h: image.h, px }
+        Image {
+            w: image.w,
+            h: image.h,
+            px,
+        }
     }
 }
 

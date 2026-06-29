@@ -95,7 +95,10 @@ impl Mira {
             portal.swap();
         }
 
-        Tick { latency: start.elapsed(), store }
+        Tick {
+            latency: start.elapsed(),
+            store,
+        }
     }
 }
 

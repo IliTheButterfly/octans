@@ -21,8 +21,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    parse_macro_input, punctuated::Punctuated, Expr, FnArg, ImplItem, ItemImpl, Lit,
-    MetaNameValue, Pat, ReturnType, Token, Type,
+    parse_macro_input, punctuated::Punctuated, Expr, FnArg, ImplItem, ItemImpl, Lit, MetaNameValue,
+    Pat, ReturnType, Token, Type,
 };
 
 #[proc_macro_attribute]
@@ -34,7 +34,11 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut id: Option<String> = None;
     let mut out_name = String::from("out");
     for nv in args {
-        let key = nv.path.get_ident().map(|i| i.to_string()).unwrap_or_default();
+        let key = nv
+            .path
+            .get_ident()
+            .map(|i| i.to_string())
+            .unwrap_or_default();
         let val = match &nv.value {
             Expr::Lit(e) => match &e.lit {
                 Lit::Str(s) => s.value(),
@@ -126,12 +130,9 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
                 match a.parse_args::<MetaNameValue>() {
                     Ok(nv) if nv.path.is_ident("default") => default = Some(nv.value),
                     _ => {
-                        return syn::Error::new_spanned(
-                            a,
-                            "#[param] expects `default = <expr>`",
-                        )
-                        .to_compile_error()
-                        .into()
+                        return syn::Error::new_spanned(a, "#[param] expects `default = <expr>`")
+                            .to_compile_error()
+                            .into()
                     }
                 }
             }

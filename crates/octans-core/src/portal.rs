@@ -43,12 +43,18 @@ impl Portal {
 
     /// A source node yielding the previous tick's value on `out_port`.
     pub fn reader(&self, out_port: &'static str) -> PortalRead {
-        PortalRead { portal: self.clone(), out_port }
+        PortalRead {
+            portal: self.clone(),
+            out_port,
+        }
     }
 
     /// A sink node capturing `in_port` into the portal for the next tick.
     pub fn writer(&self, in_port: &'static str) -> PortalWrite {
-        PortalWrite { portal: self.clone(), in_port }
+        PortalWrite {
+            portal: self.clone(),
+            in_port,
+        }
     }
 
     /// Promote this tick's write to be next tick's read. Called by the interpreter at the

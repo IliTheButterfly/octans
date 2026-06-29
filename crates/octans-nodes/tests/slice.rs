@@ -45,7 +45,11 @@ fn slice_runs_and_counts_blobs() {
 #[test]
 fn type_mismatch_is_rejected_at_connect_time() {
     let mut g = Graph::new(registry());
-    let cam = g.add(SyntheticCamera { w: 16, h: 16, blobs: vec![] });
+    let cam = g.add(SyntheticCamera {
+        w: 16,
+        h: 16,
+        blobs: vec![],
+    });
     let rep = g.add(Report { label: "x" });
 
     // frame:Image  ->  count:u32   must be refused before anything runs.

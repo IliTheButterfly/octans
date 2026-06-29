@@ -32,10 +32,16 @@ pub enum Shape {
 
 impl TypeSpec {
     pub const fn scalar(id: TypeId) -> Self {
-        Self { id, shape: Shape::Scalar }
+        Self {
+            id,
+            shape: Shape::Scalar,
+        }
     }
     pub const fn vector(id: TypeId, len: Option<usize>) -> Self {
-        Self { id, shape: Shape::Vector(len) }
+        Self {
+            id,
+            shape: Shape::Vector(len),
+        }
     }
 }
 

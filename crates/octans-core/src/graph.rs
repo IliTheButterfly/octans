@@ -22,9 +22,17 @@ pub(crate) struct Edge {
 /// A connection failure, carrying the ids/ports needed to light up the right node in a UI.
 #[derive(Debug)]
 pub enum ConnectError {
-    NoSuchOutput { node: NodeId, port: String },
-    NoSuchInput { node: NodeId, port: String },
-    UnregisteredType { id: &'static str },
+    NoSuchOutput {
+        node: NodeId,
+        port: String,
+    },
+    NoSuchInput {
+        node: NodeId,
+        port: String,
+    },
+    UnregisteredType {
+        id: &'static str,
+    },
     TypeMismatch {
         from_node: NodeId,
         from: TypeSpec,
@@ -42,7 +50,12 @@ pub struct Graph {
 
 impl Graph {
     pub fn new(registry: Registry) -> Self {
-        Self { registry, nodes: Vec::new(), edges: Vec::new(), portals: Vec::new() }
+        Self {
+            registry,
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            portals: Vec::new(),
+        }
     }
 
     pub fn add(&mut self, node: impl Node + 'static) -> NodeId {
@@ -60,11 +73,17 @@ impl Graph {
     }
 
     fn output_spec(&self, n: NodeId, port: &str) -> Option<PortSpec> {
-        self.nodes[n.0].outputs().into_iter().find(|p| p.name == port)
+        self.nodes[n.0]
+            .outputs()
+            .into_iter()
+            .find(|p| p.name == port)
     }
 
     fn input_spec(&self, n: NodeId, port: &str) -> Option<PortSpec> {
-        self.nodes[n.0].inputs().into_iter().find(|p| p.name == port)
+        self.nodes[n.0]
+            .inputs()
+            .into_iter()
+            .find(|p| p.name == port)
     }
 
     pub fn connect(
@@ -76,10 +95,16 @@ impl Graph {
     ) -> Result<(), ConnectError> {
         let out = self
             .output_spec(from, from_port)
-            .ok_or(ConnectError::NoSuchOutput { node: from, port: from_port.to_string() })?;
+            .ok_or(ConnectError::NoSuchOutput {
+                node: from,
+                port: from_port.to_string(),
+            })?;
         let inp = self
             .input_spec(to, to_port)
-            .ok_or(ConnectError::NoSuchInput { node: to, port: to_port.to_string() })?;
+            .ok_or(ConnectError::NoSuchInput {
+                node: to,
+                port: to_port.to_string(),
+            })?;
 
         if !self.registry.is_registered(out.ty.id) {
             return Err(ConnectError::UnregisteredType { id: out.ty.id });
