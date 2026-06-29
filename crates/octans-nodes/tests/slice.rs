@@ -1,18 +1,21 @@
-//! The first vertical slice: `SyntheticCamera → Threshold → BlobCount → Report`.
+//! The vertical slice, now authored with `#[node]`: `SyntheticCamera → Threshold → BlobCount → Report`.
 //!
-//! Proves the engine spine end-to-end with zero external dependencies:
-//! typed / type-erased values, the open type registry, connect-time type checking,
-//! topological interpretation by `Mira`, and per-tick latency.
+//! Same end-to-end proof as the v0 slice, but the nodes are written with the macro and live in
+//! a *separate crate* from the engine — validating the real plugin-author path.
 
-use octans_core::std_nodes::*;
 use octans_core::*;
+use octans_nodes::*;
+
+fn registry() -> Registry {
+    let mut reg = Registry::new();
+    register_primitives(&mut reg); // u32, f32, ... (from octans-core)
+    register_node_types(&mut reg); // Image (from octans-nodes)
+    reg
+}
 
 #[test]
 fn slice_runs_and_counts_blobs() {
-    let mut reg = Registry::new();
-    register_std_types(&mut reg);
-
-    let mut g = Graph::new(reg);
+    let mut g = Graph::new(registry());
     let cam = g.add(SyntheticCamera {
         w: 128,
         h: 128,
@@ -41,10 +44,7 @@ fn slice_runs_and_counts_blobs() {
 
 #[test]
 fn type_mismatch_is_rejected_at_connect_time() {
-    let mut reg = Registry::new();
-    register_std_types(&mut reg);
-
-    let mut g = Graph::new(reg);
+    let mut g = Graph::new(registry());
     let cam = g.add(SyntheticCamera { w: 16, h: 16, blobs: vec![] });
     let rep = g.add(Report { label: "x" });
 

@@ -62,3 +62,36 @@ impl Value {
         Arc::strong_count(&self.0)
     }
 }
+
+/// Binds a concrete Rust type to its stable registry [`TypeId`] (and shape).
+///
+/// Implemented for built-in scalars in this crate (see [`crate::prims`]) and by plugins for
+/// their own types. The `#[node]` macro uses this to derive a port's [`TypeSpec`] from the
+/// Rust type written in a node's `process` signature — so authors never restate type ids.
+///
+/// (Orphan rule: impls must live in the crate that owns the type or this trait. Hence the
+/// primitive impls are here in `octans-core`, while domain types like `Image` impl it in their
+/// own crate.)
+pub trait RegisteredType: Any + Send + Sync + 'static {
+    const ID: TypeId;
+    fn type_spec() -> TypeSpec {
+        TypeSpec::scalar(Self::ID)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clone_shares_the_buffer_not_a_deep_copy() {
+        let v = Value::new(vec![1u8, 2, 3]);
+        assert_eq!(v.ref_count(), 1);
+        let v2 = v.clone();
+        assert_eq!(v.ref_count(), 2, "clone must bump the shared refcount");
+
+        let p1 = v.downcast_ref::<Vec<u8>>().unwrap().as_ptr();
+        let p2 = v2.downcast_ref::<Vec<u8>>().unwrap().as_ptr();
+        assert_eq!(p1, p2, "clone must share the buffer, not deep-copy it");
+    }
+}
