@@ -132,11 +132,26 @@ impl BlobCount {
     }
 }
 
+/// The optimizer's per-instance controller memory: the current threshold. Starts high so the
+/// loop visibly hunts downward into range. One of these per lane when the optimizer is fanned
+/// out over cameras.
+#[derive(Debug)]
+pub struct AutoThresholdState {
+    pub thr: u8,
+}
+
+impl Default for AutoThresholdState {
+    fn default() -> Self {
+        Self { thr: 255 }
+    }
+}
+
 /// A proportional optimizer: nudges a threshold toward whatever value yields `target` blobs.
 ///
-/// It is a *pure* node — its only state (the previous threshold) is fed back explicitly through
-/// a portal, not held internally. Wire it as a feedback loop:
-/// `BlobCount.count ─portal→ count`, `thr ─portal→ prev_thr`, and `thr → Threshold.thr`.
+/// Its controller memory lives in **local state** (`AutoThresholdState`) — node-local, runtime-
+/// owned, replicated per lane. It observes the downstream blob count through a single portal
+/// (last tick) and drives `Threshold.thr` this tick. Wire: `BlobCount.count ─portal→ count`,
+/// and `thr → Threshold.thr`.
 pub struct AutoThreshold {
     pub target: u32,
     pub gain: i32,
@@ -146,10 +161,10 @@ pub struct AutoThreshold {
 
 #[node(id = "octans.std.auto_threshold", out = "thr")]
 impl AutoThreshold {
-    fn process(&self, count: &u32, prev_thr: &u8) -> u8 {
+    fn process(&self, #[local] s: &mut AutoThresholdState, count: &u32) -> u8 {
         let err = *count as i32 - self.target as i32; // >0: too many blobs -> raise threshold
-        let next = *prev_thr as i32 + self.gain * err;
-        next.clamp(self.min as i32, self.max as i32) as u8
+        s.thr = (s.thr as i32 + self.gain * err).clamp(self.min as i32, self.max as i32) as u8;
+        s.thr
     }
 }
 

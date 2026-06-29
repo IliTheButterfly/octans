@@ -1,32 +1,36 @@
-//! `Mira` — the interpreter engine.
+//! `Mira` — the interpreter engine (the live/edit tier; named for the variable star, since it
+//! runs a graph that's constantly changing under edits). Compiles a topological order once,
+//! owns each node's per-instance local state, and runs timed ticks.
 //!
-//! Named for Mira, the famous *variable* star: this is the engine that runs a graph which is
-//! constantly changing under the author's edits (the "live/edit" tier, analogous to the
-//! lightest model in a tier set). It compiles a topological order once, then runs ticks.
-//!
-//! v0 is single-threaded and re-runs the whole order each tick. The topological order already
-//! *contains* independent same-depth levels; a later engine (`Vega` JIT, `Canopus` AOT) is
-//! where those levels get scheduled across threads / GPU. The seam is deliberately here.
+//! v0 is single-threaded and re-runs the whole order each tick. The order already contains
+//! independent same-depth levels; a later engine (`Vega` JIT, `Canopus` AOT) is where those
+//! get scheduled across threads/GPU and where local state is replicated per lane. The seam is
+//! deliberately here.
 
+use crate::context::Context;
 use crate::graph::{Graph, NodeId};
 use crate::node::{Inputs, Outputs};
 use crate::value::Value;
+use std::any::Any;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 pub struct Mira {
     order: Vec<usize>,
+    locals: Vec<Box<dyn Any + Send>>, // one per node instance (indexed by NodeId)
+    ctx: Context,
 }
 
 #[derive(Debug)]
 pub enum CompileError {
-    /// The graph has a cycle (dataflow cycles must go through a portal/feedback edge, which
-    /// is not yet implemented in v0).
+    /// The graph has a dataflow cycle (cycles must route through a portal, which is acyclic for
+    /// scheduling).
     Cycle,
 }
 
 impl Mira {
-    /// Compile the graph into an execution plan (Kahn topological sort).
+    /// Compile the graph into an execution plan (Kahn topological sort) and allocate each node's
+    /// initial local state.
     pub fn compile(graph: &Graph) -> Result<Self, CompileError> {
         let n = graph.nodes.len();
         let mut indeg = vec![0usize; n];
@@ -52,18 +56,30 @@ impl Mira {
         if order.len() != n {
             return Err(CompileError::Cycle);
         }
-        Ok(Self { order })
+        let locals = graph.nodes.iter().map(|node| node.new_local()).collect();
+        Ok(Self {
+            order,
+            locals,
+            ctx: Context::new(),
+        })
     }
 
-    /// Run one tick (one frame) through the whole graph; returns its wall-clock latency.
-    pub fn run_tick(&self, graph: &Graph) -> Tick {
+    /// Access the shared context to install resources before running (e.g. calibration tables).
+    pub fn context_mut(&mut self) -> &mut Context {
+        &mut self.ctx
+    }
+
+    /// Run one tick (one frame); returns its wall-clock latency.
+    pub fn run_tick(&mut self, graph: &Graph) -> Tick {
         let start = Instant::now();
+        let Mira { order, locals, ctx } = self;
+        ctx.advance();
+
         // (node, output-port) -> latest value produced this tick.
         let mut store: HashMap<(usize, &'static str), Value> = HashMap::new();
 
-        for &nid in &self.order {
-            // Gather inputs by following the edges that feed this node. We clone the `Value`s
-            // (cheap Arc clones — still zero-copy) so the node holds no borrow into `store`.
+        for &nid in order.iter() {
+            // Gather inputs: connected edges first, then unconnected ports' defaults.
             let mut inmap: HashMap<&'static str, Value> = HashMap::new();
             for e in &graph.edges {
                 if e.to_node == nid {
@@ -72,7 +88,6 @@ impl Mira {
                     }
                 }
             }
-            // Unconnected input ports fall back to their default (parameter behaviour).
             for spec in graph.nodes[nid].inputs() {
                 if !inmap.contains_key(spec.name) {
                     if let Some(d) = spec.default {
@@ -83,7 +98,8 @@ impl Mira {
 
             let inputs = Inputs { map: inmap };
             let mut outputs = Outputs::default();
-            graph.nodes[nid].process(&inputs, &mut outputs);
+            let local: &mut dyn Any = &mut *locals[nid];
+            graph.nodes[nid].process(ctx, local, &inputs, &mut outputs);
 
             for (port, val) in outputs.map {
                 store.insert((nid, port), val);

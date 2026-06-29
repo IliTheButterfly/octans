@@ -1,10 +1,10 @@
-//! The first self-correcting loop — the thing that makes this Octans and not just a node graph.
+//! The first self-correcting loop — now with the optimizer's controller memory in **local
+//! state** and a single observation portal.
 //!
-//! Pipeline: `Camera → Threshold → BlobCount`. An `AutoThreshold` optimizer observes the blob
-//! count from the *previous* tick (via a portal) and drives `Threshold.thr` this tick, with its
-//! own previous output fed back through a second portal (pure node, explicit state). Starting
-//! from a deliberately bad threshold (255 → zero blobs), the loop must steer the threshold into
-//! the range that recovers the 3 real blobs.
+//! Pipeline: `Camera → Threshold → BlobCount`. `AutoThreshold` keeps its current threshold as
+//! node-local state, observes the previous tick's blob count via one portal, and drives
+//! `Threshold.thr`. From a deliberately bad start (local thr=255 → zero blobs) it steers the
+//! threshold down into the range that recovers the 3 real blobs.
 
 use octans_core::*;
 use octans_nodes::*;
@@ -16,9 +16,8 @@ fn optimizer_self_corrects_threshold_to_hit_target() {
     register_node_types(&mut reg);
     let mut g = Graph::new(reg);
 
-    // Feedback state, carried explicitly across ticks:
+    // one portal: last tick's blob count (the threshold itself is now the optimizer's local state)
     let p_count = g.add_portal(<u32 as RegisteredType>::type_spec(), Value::new(0u32));
-    let p_thr = g.add_portal(<u8 as RegisteredType>::type_spec(), Value::new(255u8)); // bad start
 
     let cam = g.add(SyntheticCamera {
         w: 128,
@@ -33,24 +32,16 @@ fn optimizer_self_corrects_threshold_to_hit_target() {
         min: 0,
         max: 255,
     });
-
     let count_r = g.add(p_count.reader("count"));
     let count_w = g.add(p_count.writer("count"));
-    let thr_r = g.add(p_thr.reader("thr"));
-    let thr_w = g.add(p_thr.writer("thr"));
 
-    // optimizer observes last tick's count + its own last output
     g.connect(count_r, "count", opt, "count").unwrap();
-    g.connect(thr_r, "thr", opt, "prev_thr").unwrap();
-    // optimizer drives the threshold this tick + records it for next tick
     g.connect(opt, "thr", thr_node, "thr").unwrap();
-    g.connect(opt, "thr", thr_w, "thr").unwrap();
-    // forward pipeline
     g.connect(cam, "frame", thr_node, "image").unwrap();
     g.connect(thr_node, "mask", blob, "mask").unwrap();
     g.connect(blob, "count", count_w, "count").unwrap();
 
-    let engine = Mira::compile(&g).expect("acyclic via the two portals");
+    let mut engine = Mira::compile(&g).expect("acyclic via the count portal");
 
     let mut counts = Vec::new();
     let mut thrs = Vec::new();

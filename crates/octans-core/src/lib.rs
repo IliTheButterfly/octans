@@ -13,6 +13,7 @@
 //! - **Compile-once / run-many** — [`Mira`] (the interpreter engine) builds a topological
 //!   order, then runs ticks and times them.
 
+pub mod context;
 pub mod graph;
 pub mod interp;
 pub mod node;
@@ -21,6 +22,7 @@ pub mod prims;
 pub mod registry;
 pub mod value;
 
+pub use context::Context;
 pub use graph::{ConnectError, Graph, NodeId};
 pub use interp::{CompileError, Mira, Tick};
 pub use node::{Inputs, Node, Outputs, PortSpec};

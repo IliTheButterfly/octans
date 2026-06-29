@@ -32,7 +32,7 @@ fn fanout_shares_one_frame_buffer() {
     g.connect(cam, "frame", a, "frame").unwrap();
     g.connect(cam, "frame", b, "frame").unwrap();
 
-    let engine = Mira::compile(&g).unwrap();
+    let mut engine = Mira::compile(&g).unwrap();
     let tick = engine.run_tick(&g);
 
     let pa = tick

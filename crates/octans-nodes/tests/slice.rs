@@ -29,7 +29,7 @@ fn slice_runs_and_counts_blobs() {
     g.connect(thr, "mask", blob, "mask").unwrap();
     g.connect(blob, "count", rep, "count").unwrap();
 
-    let engine = Mira::compile(&g).expect("graph is acyclic");
+    let mut engine = Mira::compile(&g).expect("graph is acyclic");
     let tick = engine.run_tick(&g);
 
     let count = tick

@@ -2,19 +2,18 @@
 //!
 //! A portal lets a value computed *downstream* feed back to an input *upstream* without
 //! creating a dataflow cycle: a [`PortalWrite`] stores a value during a tick, and a
-//! [`PortalRead`] yields the value that was written on the *previous* tick. The portal is
-//! double-buffered and swapped at each tick boundary, so a read never observes the current
-//! tick's write — the scheduler still sees a DAG.
+//! [`PortalRead`] yields the value written on the *previous* tick. Double-buffered and swapped
+//! at each tick boundary, so a read never observes the current tick's write — the scheduler
+//! still sees a DAG.
 //!
-//! This is the primitive behind self-correcting loops: an optimizer node reads a downstream
-//! result through a portal (last tick's value) and drives an upstream parameter port this tick.
-//!
-//! Design note: nodes are *pure* (no hidden cross-tick state) — all feedback/controller state
-//! is explicit, carried in portals. That keeps nodes parallelizable and codegen-friendly, the
-//! way the IR/compile path needs.
+//! Portals are for **cross-node temporal feedback** (a downstream result driving an upstream
+//! input next tick). Node-*local* state (accumulators, controller memory) belongs in a node's
+//! `Local` instead.
 
+use crate::context::Context;
 use crate::node::{Inputs, Node, Outputs, PortSpec};
 use crate::value::{TypeSpec, Value};
+use std::any::Any;
 use std::mem;
 use std::sync::{Arc, Mutex};
 
@@ -57,8 +56,8 @@ impl Portal {
         }
     }
 
-    /// Promote this tick's write to be next tick's read. Called by the interpreter at the
-    /// tick boundary.
+    /// Promote this tick's write to be next tick's read. Called by the interpreter at the tick
+    /// boundary.
     pub(crate) fn swap(&self) {
         let mut guard = self.slots.lock().unwrap();
         let s: &mut Slots = &mut guard; // one DerefMut, then disjoint field borrows
@@ -82,7 +81,13 @@ impl Node for PortalRead {
     fn outputs(&self) -> Vec<PortSpec> {
         vec![PortSpec::new(self.out_port, self.portal.ty.clone())]
     }
-    fn process(&self, _inputs: &Inputs, outputs: &mut Outputs) {
+    fn process(
+        &self,
+        _ctx: &Context,
+        _local: &mut dyn Any,
+        _inputs: &Inputs,
+        outputs: &mut Outputs,
+    ) {
         let v = self.portal.slots.lock().unwrap().front.clone();
         outputs.set_value(self.out_port, v);
     }
@@ -104,7 +109,13 @@ impl Node for PortalWrite {
     fn outputs(&self) -> Vec<PortSpec> {
         Vec::new()
     }
-    fn process(&self, inputs: &Inputs, _outputs: &mut Outputs) {
+    fn process(
+        &self,
+        _ctx: &Context,
+        _local: &mut dyn Any,
+        inputs: &Inputs,
+        _outputs: &mut Outputs,
+    ) {
         let v = inputs.value(self.in_port).clone();
         self.portal.slots.lock().unwrap().back = v;
     }

@@ -32,7 +32,7 @@ fn portal_breaks_the_cycle_and_carries_state() {
     g.connect(inc, "out", writer, "n").unwrap();
 
     // Feedback in intent, DAG in dataflow — must compile.
-    let engine = Mira::compile(&g).expect("portal breaks the cycle; graph is schedulable");
+    let mut engine = Mira::compile(&g).expect("portal breaks the cycle; graph is schedulable");
 
     let mut seen = Vec::new();
     for _ in 0..5 {

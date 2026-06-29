@@ -1,22 +1,28 @@
 //! `octans-macros` — the `#[node]` authoring attribute.
 //!
-//! Write a node as a plain struct (its fields are construction-time config) plus an `impl`
-//! block whose `process` method has a *typed* signature:
+//! Write a node as a plain struct (its fields = construction-time config) plus an `impl` block
+//! whose `process` method has a *typed* signature. Parameters are classified by attribute:
 //!
 //! ```ignore
 //! #[node(id = "octans.std.threshold", out = "mask")]
 //! impl Threshold {
-//!     fn process(&self, image: &Image) -> Image { /* self.thr is in scope */ }
+//!     fn process(
+//!         &self,
+//!         #[ctx] ctx: &Context,                 // shared read-mostly globals (optional)
+//!         #[local] s: &mut ThrState,            // per-instance private state (optional; State: Default)
+//!         #[param(default = 128u8)] thr: &u8,   // an input port with a default (a parameter)
+//!         image: &Image,                        // a plain input port
+//!     ) -> Image { /* returns the `out` port */ }
 //! }
 //! ```
 //!
-//! The macro derives the `Node` impl: each `process` parameter becomes a named input port
-//! (its type's `TypeSpec` via `RegisteredType`), the return becomes the (named) output port,
-//! and the type-erase glue — `inputs.get::<T>(name)` / `outputs.set(name, ret)` — is generated.
-//! This is the boilerplate the v0 slice wrote by hand, now eliminated.
+//! The macro derives the whole `Node` impl: `inputs()`/`outputs()` from the typed signature
+//! (via `RegisteredType`), `new_local()` from the `#[local]` state's `Default`, and the
+//! type-erase glue (`inputs.get::<T>` / `local.downcast_mut::<S>` / `outputs.set`).
 //!
-//! v0 scope: inputs are by-reference (`&T`); a single output named by `out` (default `"out"`),
-//! or none for a `()` return. Multiple outputs, params-as-writable-ports, and QoS come later.
+//! v0 scope: inputs are by-reference (`&T`); `#[local]` is `&mut S` (`S: Default`); a single
+//! output named by `out` (default `"out"`), or none for a `()` return. Multiple outputs and
+//! per-lane replication land later.
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -25,12 +31,29 @@ use syn::{
     Pat, ReturnType, Token, Type,
 };
 
+enum Kind {
+    Ctx,
+    Local(Type),
+    Input { elem: Type, default: Option<Expr> },
+}
+
+struct Param {
+    name: syn::Ident,
+    kind: Kind,
+}
+
+fn elem_of(ty: &Type) -> Type {
+    match ty {
+        Type::Reference(r) => (*r.elem).clone(),
+        other => other.clone(),
+    }
+}
+
 #[proc_macro_attribute]
 pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
-    // ---- parse attribute args: id = "...", out = "..." ----
-    let args = parse_macro_input!(
-        attr with Punctuated::<MetaNameValue, Token![,]>::parse_terminated
-    );
+    // ---- attribute args: id = "...", out = "..." ----
+    let args =
+        parse_macro_input!(attr with Punctuated::<MetaNameValue, Token![,]>::parse_terminated);
     let mut id: Option<String> = None;
     let mut out_name = String::from("out");
     for nv in args {
@@ -71,21 +94,21 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
 
-    // ---- parse the impl block and find/rename `process` ----
+    // ---- find/rename `process`, strip the param-classifying attrs from the re-emitted copy ----
     let mut impl_block = parse_macro_input!(item as ItemImpl);
-
     let mut sig = None;
     for it in &mut impl_block.items {
         if let ImplItem::Fn(f) = it {
             if f.sig.ident == "process" {
-                // Clone the signature WITH its `#[param]` attrs intact (we read defaults from
-                // them below), then rename the method and strip the attrs from the re-emitted
-                // copy — a custom attribute on a fn parameter would otherwise fail to compile.
                 sig = Some(f.sig.clone());
                 f.sig.ident = syn::Ident::new("__node_run", f.sig.ident.span());
                 for arg in f.sig.inputs.iter_mut() {
                     if let FnArg::Typed(pt) = arg {
-                        pt.attrs.retain(|a| !a.path().is_ident("param"));
+                        pt.attrs.retain(|a| {
+                            !(a.path().is_ident("param")
+                                || a.path().is_ident("ctx")
+                                || a.path().is_ident("local"))
+                        });
                     }
                 }
             }
@@ -104,42 +127,44 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
     let self_ty = (*impl_block.self_ty).clone();
 
-    // ---- inputs: each non-receiver param -> (name, element type) ----
-    let mut in_names: Vec<String> = Vec::new();
-    let mut in_types: Vec<Type> = Vec::new();
-    let mut in_defaults: Vec<Option<syn::Expr>> = Vec::new();
+    // ---- classify parameters (in source order) ----
+    let mut params: Vec<Param> = Vec::new();
     for arg in sig.inputs.iter() {
         let FnArg::Typed(pt) = arg else { continue }; // skip &self
         let name = match &*pt.pat {
-            Pat::Ident(pi) => pi.ident.to_string(),
+            Pat::Ident(pi) => pi.ident.clone(),
             other => {
                 return syn::Error::new_spanned(other, "#[node] params must be plain identifiers")
                     .to_compile_error()
                     .into()
             }
         };
-        // accept `&T` (preferred) or bare `T`; record the element type T
-        let elem = match &*pt.ty {
-            Type::Reference(r) => (*r.elem).clone(),
-            other => other.clone(),
-        };
-        // `#[param(default = <expr>)]` marks this input as a parameter with a fallback value.
-        let mut default = None;
+        let mut kind: Option<Kind> = None;
         for a in &pt.attrs {
-            if a.path().is_ident("param") {
-                match a.parse_args::<MetaNameValue>() {
-                    Ok(nv) if nv.path.is_ident("default") => default = Some(nv.value),
+            if a.path().is_ident("ctx") {
+                kind = Some(Kind::Ctx);
+            } else if a.path().is_ident("local") {
+                kind = Some(Kind::Local(elem_of(&pt.ty)));
+            } else if a.path().is_ident("param") {
+                let default = match a.parse_args::<MetaNameValue>() {
+                    Ok(nv) if nv.path.is_ident("default") => Some(nv.value),
                     _ => {
                         return syn::Error::new_spanned(a, "#[param] expects `default = <expr>`")
                             .to_compile_error()
                             .into()
                     }
-                }
+                };
+                kind = Some(Kind::Input {
+                    elem: elem_of(&pt.ty),
+                    default,
+                });
             }
         }
-        in_names.push(name);
-        in_types.push(elem);
-        in_defaults.push(default);
+        let kind = kind.unwrap_or_else(|| Kind::Input {
+            elem: elem_of(&pt.ty),
+            default: None,
+        });
+        params.push(Param { name, kind });
     }
 
     let out_ty: Option<Type> = match &sig.output {
@@ -148,22 +173,24 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     // ---- generate fragments ----
-    let in_ports = in_names
-        .iter()
-        .zip(in_types.iter())
-        .zip(in_defaults.iter())
-        .map(|((n, t), default)| match default {
-            Some(expr) => quote! {
-                ::octans_core::PortSpec::with_default(
-                    #n,
-                    <#t as ::octans_core::RegisteredType>::type_spec(),
-                    ::octans_core::Value::new::<#t>(#expr),
-                )
-            },
-            None => quote! {
-                ::octans_core::PortSpec::new(#n, <#t as ::octans_core::RegisteredType>::type_spec())
-            },
-        });
+    let in_ports = params.iter().filter_map(|p| match &p.kind {
+        Kind::Input { elem, default } => {
+            let n = p.name.to_string();
+            Some(match default {
+                Some(e) => quote! {
+                    ::octans_core::PortSpec::with_default(
+                        #n,
+                        <#elem as ::octans_core::RegisteredType>::type_spec(),
+                        ::octans_core::Value::new::<#elem>(#e),
+                    )
+                },
+                None => quote! {
+                    ::octans_core::PortSpec::new(#n, <#elem as ::octans_core::RegisteredType>::type_spec())
+                },
+            })
+        }
+        _ => None,
+    });
 
     let outputs_method = match &out_ty {
         Some(t) => quote! {
@@ -172,16 +199,36 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => quote! { ::std::vec::Vec::new() },
     };
 
-    let binds = in_names.iter().zip(in_types.iter()).map(|(n, t)| {
-        let var = syn::Ident::new(n, proc_macro2::Span::call_site());
-        quote! { let #var = inputs.get::<#t>(#n); }
-    });
-    let call_args = in_names
+    let new_local_body = params
         .iter()
-        .map(|n| syn::Ident::new(n, proc_macro2::Span::call_site()));
+        .find_map(|p| match &p.kind {
+            Kind::Local(s) => {
+                Some(quote! { ::std::boxed::Box::new(<#s as ::core::default::Default>::default()) })
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| quote! { ::std::boxed::Box::new(()) });
+
+    let binds = params.iter().map(|p| {
+        let name = &p.name;
+        match &p.kind {
+            Kind::Ctx => quote! { let #name = _ctx; },
+            Kind::Local(s) => quote! {
+                let #name: &mut #s = _local
+                    .downcast_mut::<#s>()
+                    .expect("octans: local state type mismatch");
+            },
+            Kind::Input { elem, .. } => {
+                let ns = name.to_string();
+                quote! { let #name = _inputs.get::<#elem>(#ns); }
+            }
+        }
+    });
+
+    let call_args = params.iter().map(|p| &p.name);
     let run = quote! { self.__node_run( #( #call_args ),* ) };
     let body_tail = match &out_ty {
-        Some(_) => quote! { let __ret = #run; outputs.set(#out_name, __ret); },
+        Some(_) => quote! { let __ret = #run; _outputs.set(#out_name, __ret); },
         None => quote! { let () = #run; },
     };
 
@@ -196,7 +243,16 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn outputs(&self) -> ::std::vec::Vec<::octans_core::PortSpec> {
                 #outputs_method
             }
-            fn process(&self, inputs: &::octans_core::Inputs, outputs: &mut ::octans_core::Outputs) {
+            fn new_local(&self) -> ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send> {
+                #new_local_body
+            }
+            fn process(
+                &self,
+                _ctx: &::octans_core::Context,
+                _local: &mut dyn ::std::any::Any,
+                _inputs: &::octans_core::Inputs,
+                _outputs: &mut ::octans_core::Outputs,
+            ) {
                 #( #binds )*
                 #body_tail
             }
