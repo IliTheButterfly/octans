@@ -22,7 +22,11 @@ fn fanout_shares_one_frame_buffer() {
     register_node_types(&mut reg);
     let mut g = Graph::new(reg);
 
-    let cam = g.add(SyntheticCamera { w: 64, h: 64, blobs: vec![(20, 20, 5)] });
+    let cam = g.add(SyntheticCamera {
+        w: 64,
+        h: 64,
+        blobs: vec![(20, 20, 5)],
+    });
     let a = g.add(FramePtr);
     let b = g.add(FramePtr);
     g.connect(cam, "frame", a, "frame").unwrap();
@@ -31,8 +35,16 @@ fn fanout_shares_one_frame_buffer() {
     let engine = Mira::compile(&g).unwrap();
     let tick = engine.run_tick(&g);
 
-    let pa = tick.output(a, "ptr").and_then(|v| v.downcast_ref::<u64>()).copied().unwrap();
-    let pb = tick.output(b, "ptr").and_then(|v| v.downcast_ref::<u64>()).copied().unwrap();
+    let pa = tick
+        .output(a, "ptr")
+        .and_then(|v| v.downcast_ref::<u64>())
+        .copied()
+        .unwrap();
+    let pb = tick
+        .output(b, "ptr")
+        .and_then(|v| v.downcast_ref::<u64>())
+        .copied()
+        .unwrap();
 
     assert_ne!(pa, 0);
     assert_eq!(
