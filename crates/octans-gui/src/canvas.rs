@@ -5,7 +5,7 @@ use crate::layout::{PIN_ROW, TITLE_H};
 use crate::{OctansApp, TickSnapshot};
 use eframe::egui::{self, pos2, Align2, Color32, CornerRadius, FontId, Pos2, Stroke, StrokeKind};
 use octans_core::NodeId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 fn node_fill(id: NodeId, last: &Option<TickSnapshot>) -> Color32 {
     if let Some(t) = last {
@@ -69,6 +69,19 @@ impl OctansApp {
         let zoom = self.camera.zoom;
         let cam = self.camera;
 
+        // Critical path (longest-latency dependency chain) — computed once measurements exist.
+        let (crit_nodes, crit_edges) = if self.show_critical_path && self.tick_count > 0 {
+            let lat = self.latencies();
+            let path = crate::schedule::critical_path(&self.view, &self.layout.levels, &lat);
+            let nodes: HashSet<usize> = path.iter().map(|n| n.0).collect();
+            let edges: HashSet<(usize, usize)> =
+                path.windows(2).map(|w| (w[0].0, w[1].0)).collect();
+            (nodes, edges)
+        } else {
+            (HashSet::new(), HashSet::new())
+        };
+        let gold = Color32::from_rgb(232, 194, 64);
+
         // Pin screen positions, keyed by (node index, port name).
         let mut out_pin: HashMap<(usize, String), Pos2> = HashMap::new();
         let mut in_pin: HashMap<(usize, String), Pos2> = HashMap::new();
@@ -96,12 +109,18 @@ impl OctansApp {
                 out_pin.get(&(e.from.0, e.from_port.clone())),
                 in_pin.get(&(e.to.0, e.to_port.clone())),
             ) {
+                let on_crit = crit_edges.contains(&(e.from.0, e.to.0));
+                let stroke = if on_crit {
+                    Stroke::new(3.0, gold)
+                } else {
+                    Stroke::new(1.5, edge_color(e.from, &self.last_tick))
+                };
                 let dx = ((p1.x - p0.x).abs() * 0.5).max(30.0 * zoom);
                 let bez = egui::epaint::CubicBezierShape::from_points_stroke(
                     [p0, pos2(p0.x + dx, p0.y), pos2(p1.x - dx, p1.y), p1],
                     false,
                     Color32::TRANSPARENT,
-                    Stroke::new(1.5, edge_color(e.from, &self.last_tick)),
+                    stroke,
                 );
                 painter.add(bez);
             }
@@ -126,12 +145,12 @@ impl OctansApp {
             let wr = self.layout.rects[vn.id.0];
             let r = cam.to_screen_rect(wr, origin);
             painter.rect_filled(r, CornerRadius::same(4), node_fill(vn.id, &self.last_tick));
-            painter.rect_stroke(
-                r,
-                CornerRadius::same(4),
-                node_stroke(vn.id, &self.last_tick),
-                StrokeKind::Inside,
-            );
+            let stroke = if crit_nodes.contains(&vn.id.0) {
+                Stroke::new(2.5, gold)
+            } else {
+                node_stroke(vn.id, &self.last_tick)
+            };
+            painter.rect_stroke(r, CornerRadius::same(4), stroke, StrokeKind::Inside);
 
             let faulted = self
                 .last_tick

@@ -10,12 +10,23 @@ pub mod log_panel;
 pub mod model;
 pub mod profiler;
 pub mod scene;
+pub mod schedule;
 
 use eframe::egui;
 use octans_core::{Diagnostic, Fault, Graph, Mira, NodeId, Tick};
 use scene::SceneKind;
 use std::collections::{HashSet, VecDeque};
 use std::time::Duration;
+
+/// Format a duration compactly (ms above 1ms, else µs). Shared by the profiler/schedule panels.
+pub(crate) fn fmt_dur(d: Duration) -> String {
+    let us = d.as_secs_f64() * 1e6;
+    if us >= 1000.0 {
+        format!("{:.2} ms", us / 1000.0)
+    } else {
+        format!("{us:.1} µs")
+    }
+}
 
 /// Run-control mode.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -168,6 +179,7 @@ pub struct OctansApp {
     pub(crate) camera: Camera,
     pub(crate) follow_log: bool,
     pub(crate) show_latency_overlay: bool,
+    pub(crate) show_critical_path: bool,
     pub(crate) profiler_sort: ProfileSort,
 }
 
@@ -191,8 +203,16 @@ impl OctansApp {
             camera: Camera::default(),
             follow_log: true,
             show_latency_overlay: false,
+            show_critical_path: false,
             profiler_sort: ProfileSort::default(),
         }
+    }
+
+    /// Per-node last-tick latency, index-aligned with `NodeId.0` (for the schedule/critical-path).
+    pub(crate) fn latencies(&self) -> Vec<Duration> {
+        (0..self.view.nodes.len())
+            .map(|i| self.engine.profile().node(NodeId(i)).last)
+            .collect()
     }
 
     /// Rebuild everything for a fresh scene.
@@ -300,6 +320,10 @@ impl eframe::App for OctansApp {
             .resizable(true)
             .default_width(360.0)
             .show(ctx, |ui| self.profiler_ui(ui));
+        egui::SidePanel::left("schedule")
+            .resizable(true)
+            .default_width(240.0)
+            .show(ctx, |ui| self.schedule_ui(ui));
         egui::CentralPanel::default().show(ctx, |ui| self.canvas_ui(ui));
 
         // While playing, schedule the next repaint at the tick rate — *not* every monitor frame —

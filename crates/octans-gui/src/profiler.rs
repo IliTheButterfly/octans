@@ -1,6 +1,6 @@
 //! The Profiler panel: a sortable per-node latency table from `Mira::profile()`.
 
-use crate::{OctansApp, ProfileKey, ProfileSort};
+use crate::{fmt_dur, OctansApp, ProfileKey, ProfileSort};
 use eframe::egui;
 use octans_core::NodeId;
 use std::time::Duration;
@@ -32,15 +32,6 @@ pub fn sort_rows(rows: &mut [Row], sort: ProfileSort) {
             ord
         }
     });
-}
-
-fn fmt_dur(d: Duration) -> String {
-    let us = d.as_secs_f64() * 1e6;
-    if us >= 1000.0 {
-        format!("{:.2} ms", us / 1000.0)
-    } else {
-        format!("{us:.1} µs")
-    }
 }
 
 impl OctansApp {
