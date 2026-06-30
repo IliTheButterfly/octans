@@ -29,6 +29,7 @@ pub mod registry;
 pub mod serial;
 pub mod strategy;
 pub mod value;
+pub mod viz;
 
 pub use context::Context;
 pub use control::{Loop, Switch};
