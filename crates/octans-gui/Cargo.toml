@@ -9,9 +9,17 @@ description = "Octans realtime graph visualizer (read-only) — egui/eframe glow
 [dependencies]
 octans-core = { path = "../octans-core" }
 octans-nodes = { path = "../octans-nodes" }
-# Default features give the glow (OpenGL) backend + x11/wayland — and NOT wgpu (it's opt-in), so
-# no discrete GPU is required. Disabling default features drops winit's Linux backends.
-eframe = "0.31"
+# glow (OpenGL, no discrete GPU needed) + the Linux backends, but WITHOUT accesskit: its startup
+# connect to the a11y D-Bus can block the first frame on a cold bus (the window then shows as "not
+# responding" on first launch). default-features=false also keeps wgpu out (it's not default anyway).
+eframe = { version = "0.31", default-features = false, features = [
+    "glow",
+    "default_fonts",
+    "wayland",
+    "x11",
+] }
+log = "0.4"
+env_logger = "0.11"
 
 [[bin]]
 name = "octans-gui"
