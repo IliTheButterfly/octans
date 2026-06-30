@@ -237,12 +237,37 @@ pub enum CompileError {
     /// The graph has a dataflow cycle (cycles must route through a portal, which is acyclic for
     /// scheduling).
     Cycle,
+    /// A required input port (no `default`, not `optional`) has nothing connected to it — it
+    /// could never receive a value, so the node would skip every tick. Caught at compile rather
+    /// than silently skipping forever at runtime. Connect it, give it a default, or mark it
+    /// `.optional()`.
+    UnconnectedInput { node: NodeId, port: String },
 }
 
 impl Mira {
     /// Compile the graph: topo-sort (cycle check), assign depth levels, let each node `prepare`
     /// (registry in scope — e.g. `Map` builds its group body's sub-plan), and allocate state.
     pub fn compile(graph: &Graph) -> Result<Self, CompileError> {
+        // Every required input (no default, not optional) must have something connected to it —
+        // otherwise it could never receive a value and the node would skip every tick.
+        for (nid, node) in graph.nodes.iter().enumerate() {
+            for spec in node.inputs() {
+                if spec.optional || spec.default.is_some() {
+                    continue;
+                }
+                let connected = graph
+                    .edges
+                    .iter()
+                    .any(|e| e.to_node == nid && e.to_port == spec.name);
+                if !connected {
+                    return Err(CompileError::UnconnectedInput {
+                        node: NodeId(nid),
+                        port: spec.name.to_string(),
+                    });
+                }
+            }
+        }
+
         let deps: Vec<(usize, usize)> = graph
             .edges
             .iter()

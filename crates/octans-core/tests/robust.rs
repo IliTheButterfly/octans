@@ -101,6 +101,24 @@ fn a_missing_required_input_skips_the_node_and_cascades() {
 }
 
 #[test]
+fn compile_rejects_an_unconnected_required_input() {
+    let mut reg = Registry::new();
+    register_primitives(&mut reg);
+    let mut g = Graph::new(reg);
+    // Echo's required `in` is left unconnected: it could never receive a value.
+    let echo = g.add(Echo);
+
+    match Mira::compile(&g) {
+        Err(CompileError::UnconnectedInput { node, port }) => {
+            assert_eq!(node, echo);
+            assert_eq!(port, "in");
+        }
+        Err(e) => panic!("expected UnconnectedInput, got {e:?}"),
+        Ok(_) => panic!("expected compile to fail on unconnected required input"),
+    }
+}
+
+#[test]
 fn a_panicking_node_is_isolated_and_the_tick_still_completes() {
     // Silence the default panic hook so the (expected) panic doesn't spam test output.
     let prev = std::panic::take_hook();
