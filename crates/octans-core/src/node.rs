@@ -68,6 +68,12 @@ impl Inputs {
             .unwrap_or_else(|| panic!("missing input on port `{port}`"))
     }
 
+    /// Non-panicking accessor: the value on `port` if present (for `optional` inputs that may be
+    /// absent this tick).
+    pub fn get_value(&self, port: &str) -> Option<&Value> {
+        self.map.get(port)
+    }
+
     /// Typed accessor — the manual version of what `#[node]` generates.
     pub fn get<T: Any>(&self, port: &str) -> &T {
         self.value(port)

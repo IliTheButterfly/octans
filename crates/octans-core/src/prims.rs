@@ -14,12 +14,14 @@ macro_rules! prim {
             }
         )+
 
-        /// Register the built-in scalar types into a [`Registry`] (with `==` comparators).
+        /// Register the built-in scalar types into a [`Registry`] (with `==` comparators and
+        /// JSON (de)serialization, so primitives can be recorded/replayed through file nodes).
         pub fn register_primitives(reg: &mut Registry) {
             $(
                 reg.register_type(
                     TypeDescriptor::new(<$t as RegisteredType>::ID, stringify!($t))
-                        .with_eq(crate::registry::eq_via::<$t>),
+                        .with_eq(crate::registry::eq_via::<$t>)
+                        .with_serde(crate::registry::ser_via::<$t>, crate::registry::de_via::<$t>),
                 );
             )+
         }

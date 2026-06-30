@@ -5,10 +5,11 @@
 use crate::Image;
 use nalgebra::{DMatrix, Matrix3x4};
 use octans_core::{
-    eq_via, Context, Inputs, Node, Outputs, PortSpec, RegisteredType, Registry, Shape,
-    TypeDescriptor, TypeId, TypeSpec, Value,
+    de_via, eq_via, ser_via, Context, Inputs, Node, Outputs, PortSpec, RegisteredType, Registry,
+    Shape, TypeDescriptor, TypeId, TypeSpec, Value,
 };
 use octans_macros::node;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 
 /// A 3×4 camera projection matrix `P` (so a homogeneous world point `X` projects to `P·X`).
@@ -16,11 +17,11 @@ use std::any::Any;
 pub struct Proj(pub Matrix3x4<f64>);
 
 /// A 2D image observation (normalized/undistorted coords).
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Px(pub [f64; 2]);
 
 /// A 3D point.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Pt3(pub [f64; 3]);
 
 impl Proj {
@@ -46,9 +47,18 @@ impl RegisteredType for Pt3 {
 
 /// Register the tracking domain types (with comparators) into a [`Registry`].
 pub fn register_tracking_types(reg: &mut Registry) {
+    // Proj wraps a nalgebra matrix (no serde without that feature) — comparator only.
     reg.register_type(TypeDescriptor::new(Proj::ID, "projection 3x4").with_eq(eq_via::<Proj>));
-    reg.register_type(TypeDescriptor::new(Px::ID, "pixel 2d").with_eq(eq_via::<Px>));
-    reg.register_type(TypeDescriptor::new(Pt3::ID, "point 3d").with_eq(eq_via::<Pt3>));
+    reg.register_type(
+        TypeDescriptor::new(Px::ID, "pixel 2d")
+            .with_eq(eq_via::<Px>)
+            .with_serde(ser_via::<Px>, de_via::<Px>),
+    );
+    reg.register_type(
+        TypeDescriptor::new(Pt3::ID, "point 3d")
+            .with_eq(eq_via::<Pt3>)
+            .with_serde(ser_via::<Pt3>, de_via::<Pt3>),
+    );
 }
 
 /// N-view triangulation (DLT): inputs are a `Vector<Proj>` and the matching `Vector<Px>`;

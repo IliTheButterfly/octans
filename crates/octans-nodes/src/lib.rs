@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod diag;
 pub use diag::*;
+pub mod recfile;
+pub use recfile::*;
 pub mod tracking;
 pub use tracking::*;
 
@@ -52,7 +54,7 @@ pub const T_IMAGE: TypeId = "octans.std.image";
 
 /// A grayscale `u8` image. Shared cheaply via the enclosing `Value`'s `Arc`; a fresh `px`
 /// buffer is allocated only when a node *computes* a new image (not for transport).
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Image {
     pub w: usize,
     pub h: usize,
@@ -75,7 +77,9 @@ impl std::fmt::Debug for Image {
 /// (Primitives like `u32` are registered separately via `octans_core::register_primitives`.)
 pub fn register_node_types(reg: &mut Registry) {
     reg.register_type(
-        TypeDescriptor::new(T_IMAGE, "Image (grayscale, u8)").with_eq(octans_core::eq_via::<Image>),
+        TypeDescriptor::new(T_IMAGE, "Image (grayscale, u8)")
+            .with_eq(octans_core::eq_via::<Image>)
+            .with_serde(octans_core::ser_via::<Image>, octans_core::de_via::<Image>),
     );
 }
 
