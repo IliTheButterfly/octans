@@ -12,6 +12,7 @@
 use crate::context::Context;
 use crate::graph::{Edge, Graph, NodeId};
 use crate::node::{Inputs, Node, Outputs};
+use crate::profile::Profile;
 use crate::value::Value;
 use std::any::Any;
 use std::collections::HashMap;
@@ -30,7 +31,9 @@ pub(crate) fn run_order(
     locals: &mut [Box<dyn Any + Send>],
     ctx: &Context,
     injected: &HashMap<(usize, &'static str), Value>,
+    timings: &mut Vec<(usize, Duration)>,
 ) -> Store {
+    timings.clear();
     let mut store: Store = HashMap::new();
 
     for &nid in order {
@@ -58,7 +61,9 @@ pub(crate) fn run_order(
         let inputs = Inputs { map: inmap };
         let mut outputs = Outputs::default();
         let local: &mut dyn Any = &mut *locals[nid];
+        let t0 = Instant::now();
         nodes[nid].process(ctx, local, &inputs, &mut outputs);
+        timings.push((nid, t0.elapsed()));
 
         for (port, val) in outputs.map {
             store.insert((nid, port), val);
@@ -104,6 +109,7 @@ pub struct Mira {
     order: Vec<usize>,
     locals: Vec<Box<dyn Any + Send>>, // one per node instance (indexed by NodeId)
     ctx: Context,
+    profile: Profile,
 }
 
 #[derive(Debug)]
@@ -131,6 +137,7 @@ impl Mira {
             order,
             locals,
             ctx: Context::new(),
+            profile: Profile::with_len(graph.nodes.len()),
         })
     }
 
@@ -139,14 +146,36 @@ impl Mira {
         &mut self.ctx
     }
 
+    /// The always-on per-node latency profile, accumulated across ticks.
+    pub fn profile(&self) -> &Profile {
+        &self.profile
+    }
+
     /// Run one tick (one frame); returns its wall-clock latency.
     pub fn run_tick(&mut self, graph: &Graph) -> Tick {
         let start = Instant::now();
-        let Mira { order, locals, ctx } = self;
+        let Mira {
+            order,
+            locals,
+            ctx,
+            profile,
+        } = self;
         ctx.advance();
 
         let injected: HashMap<(usize, &'static str), Value> = HashMap::new();
-        let store = run_order(&graph.nodes, &graph.edges, order, locals, ctx, &injected);
+        let mut timings: Vec<(usize, Duration)> = Vec::new();
+        let store = run_order(
+            &graph.nodes,
+            &graph.edges,
+            order,
+            locals,
+            ctx,
+            &injected,
+            &mut timings,
+        );
+        for (nid, dur) in &timings {
+            profile.record(*nid, *dur);
+        }
 
         // Tick boundary: promote each portal's write to be next tick's read.
         for portal in &graph.portals {

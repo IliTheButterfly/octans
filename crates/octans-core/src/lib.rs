@@ -22,6 +22,7 @@ pub mod map;
 pub mod node;
 pub mod portal;
 pub mod prims;
+pub mod profile;
 pub mod registry;
 pub mod value;
 
@@ -34,5 +35,6 @@ pub use map::Map;
 pub use node::{Inputs, Node, Outputs, PortSpec};
 pub use portal::{Portal, PortalRead, PortalWrite};
 pub use prims::register_primitives;
+pub use profile::{NodeStat, Profile};
 pub use registry::{Registry, TypeDescriptor};
 pub use value::{RegisteredType, Shape, TypeId, TypeSpec, Value};

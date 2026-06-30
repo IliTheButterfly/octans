@@ -262,6 +262,7 @@ impl Node for Map {
                 for (k, b) in self.inputs.iter().enumerate() {
                     injected.insert((b.node, b.port), vecs[k][i].clone());
                 }
+                let mut timings = Vec::new(); // top-level profiler measures the Map node as a whole
                 let store = run_order(
                     &self.body_nodes,
                     edges,
@@ -269,6 +270,7 @@ impl Node for Map {
                     lane,
                     ctx,
                     &injected,
+                    &mut timings,
                 );
                 self.outputs
                     .iter()
