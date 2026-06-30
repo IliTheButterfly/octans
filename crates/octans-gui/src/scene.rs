@@ -2,11 +2,19 @@
 //! ready to tick — mirroring `octans-nodes/examples/{tracker,diagnostics}.rs`.
 
 use octans_core::{
-    group, register_primitives, Context, Gather, Graph, Inputs, Mira, Node, Outputs, PortSpec,
-    RegisteredType, Registry,
+    group, register_primitives, Context, Gather, Graph, Inputs, Mira, Node, NodeId, Outputs,
+    PortSpec, RegisteredType, Registry, Strategy, StrategyHandle,
 };
 use octans_nodes::*;
 use std::any::Any;
+
+/// A built scene: the graph + compiled engine, plus any `Strategy` nodes' handles (for the
+/// autotuner / live A/B).
+pub struct Scene {
+    pub graph: Graph,
+    pub engine: Mira,
+    pub strategies: Vec<(NodeId, StrategyHandle)>,
+}
 
 /// Which built-in scene to show.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -14,13 +22,15 @@ pub enum SceneKind {
     Tracker,
     Diagnostics,
     Robustness,
+    Strategy,
 }
 
 impl SceneKind {
-    pub const ALL: [SceneKind; 3] = [
+    pub const ALL: [SceneKind; 4] = [
         SceneKind::Tracker,
         SceneKind::Diagnostics,
         SceneKind::Robustness,
+        SceneKind::Strategy,
     ];
 
     pub fn label(self) -> &'static str {
@@ -28,13 +38,29 @@ impl SceneKind {
             SceneKind::Tracker => "tracker",
             SceneKind::Diagnostics => "diagnostics",
             SceneKind::Robustness => "robustness",
+            SceneKind::Strategy => "strategy",
         }
     }
-    pub fn build(self) -> (Graph, Mira) {
-        match self {
-            SceneKind::Tracker => tracker(),
-            SceneKind::Diagnostics => diagnostics(),
-            SceneKind::Robustness => robustness(),
+    pub fn build(self) -> Scene {
+        let (graph, engine, strategies) = match self {
+            SceneKind::Tracker => {
+                let (g, e) = tracker();
+                (g, e, vec![])
+            }
+            SceneKind::Diagnostics => {
+                let (g, e) = diagnostics();
+                (g, e, vec![])
+            }
+            SceneKind::Robustness => {
+                let (g, e) = robustness();
+                (g, e, vec![])
+            }
+            SceneKind::Strategy => strategy_scene(),
+        };
+        Scene {
+            graph,
+            engine,
+            strategies,
         }
     }
 }
@@ -143,6 +169,43 @@ pub fn robustness() -> (Graph, Mira) {
     (g, engine)
 }
 
+/// An autotuner showcase: a camera feeds a `Strategy` with two interchangeable, bit-identical
+/// detect implementations — a two-pass `Threshold→Centroid` group and a fused `ThresholdCentroid`
+/// node. Pyxis benchmarks them on the live hardware and picks the faster verified one.
+pub fn strategy_scene() -> (Graph, Mira, Vec<(NodeId, StrategyHandle)>) {
+    let (w, h, f) = (64usize, 64usize, 100.0f64);
+    let mut reg = Registry::new();
+    register_primitives(&mut reg);
+    register_node_types(&mut reg);
+    register_tracking_types(&mut reg);
+    let mut g = Graph::new(reg);
+
+    let cam = g.add(SyntheticCamera {
+        w,
+        h,
+        blobs: vec![(20, 20, 6), (44, 40, 5)],
+    });
+    let two_pass = group("two_pass", move |gg| {
+        let t = gg.add(Threshold);
+        let c = gg.add(Centroid { w, h, f });
+        gg.connect(t, "mask", c, "mask");
+        gg.input("frame", t, "image");
+        gg.output("px", c, "px");
+    });
+    let strat = Strategy::builder()
+        .group("two_pass", &two_pass)
+        .node("fused", ThresholdCentroid { w, h, f, thr: 128 })
+        .build();
+    let handle = strat.handle();
+    let s = g.add(strat);
+    g.connect(cam, "frame", s, "frame").unwrap();
+    let log = g.add(Log::<Px>::info("detect"));
+    g.connect(s, "px", log, "value").unwrap();
+
+    let engine = Mira::compile(&g).expect("strategy scene compiles");
+    (g, engine, vec![(s, handle)])
+}
+
 // --- tiny demo nodes for the robustness scene ---
 
 struct Const42;
@@ -217,14 +280,39 @@ mod tests {
 
     #[test]
     fn graph_scenes_compile_and_tick_headlessly() {
-        for kind in [SceneKind::Tracker, SceneKind::Diagnostics] {
-            let (graph, mut engine) = kind.build();
-            assert!(graph.node_count() > 0);
+        for kind in [
+            SceneKind::Tracker,
+            SceneKind::Diagnostics,
+            SceneKind::Strategy,
+        ] {
+            let mut s = kind.build();
+            assert!(s.graph.node_count() > 0);
             for _ in 0..3 {
-                let tick = engine.run_tick(&graph);
+                let tick = s.engine.run_tick(&s.graph);
                 assert!(tick.ok(), "{} faulted: {:?}", kind.label(), tick.faults);
             }
         }
+    }
+
+    #[test]
+    fn strategy_scene_exposes_a_tunable_handle() {
+        let mut s = SceneKind::Strategy.build();
+        assert_eq!(s.strategies.len(), 1);
+        let (node, handle) = s.strategies[0].clone();
+        assert_eq!(handle.variant_count(), 2);
+        let res = s.engine.tune(
+            &s.graph,
+            &[(node, handle)],
+            octans_core::TuneConfig {
+                warmup: 1,
+                trials: 2,
+            },
+        );
+        assert_eq!(res.len(), 1);
+        assert!(
+            res[0].rejected.is_empty(),
+            "the two variants are equivalent"
+        );
     }
 
     #[test]
@@ -232,10 +320,9 @@ mod tests {
         // Silence the intentional Bomb panic during the test.
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let (graph, mut engine) = SceneKind::Robustness.build();
-        let even = engine.run_tick(&graph); // tick 1 is odd; run one to land on tick 2 (even)
-        let _ = even;
-        let t2 = engine.run_tick(&graph);
+        let mut s = SceneKind::Robustness.build();
+        let _ = s.engine.run_tick(&s.graph); // tick 1 is odd; run one to land on tick 2 (even)
+        let t2 = s.engine.run_tick(&s.graph);
         std::panic::set_hook(prev);
 
         assert_eq!(t2.faults.len(), 1, "the bomb faults");
@@ -245,8 +332,8 @@ mod tests {
 
     #[test]
     fn diagnostics_emits_log_lines() {
-        let (graph, mut engine) = SceneKind::Diagnostics.build();
-        let tick = engine.run_tick(&graph);
+        let mut s = SceneKind::Diagnostics.build();
+        let tick = s.engine.run_tick(&s.graph);
         assert!(
             !tick.diagnostics.is_empty(),
             "diagnostics scene should log each tick"

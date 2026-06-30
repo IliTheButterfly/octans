@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn diagnostics_lays_out_left_to_right_by_level() {
-        let (graph, _) = SceneKind::Diagnostics.build();
+        let graph = SceneKind::Diagnostics.build().graph;
         let view = ViewGraph::from_graph(&graph);
         let lay = layout(&view);
 

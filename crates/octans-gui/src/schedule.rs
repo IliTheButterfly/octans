@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn critical_path_follows_the_slowest_chain() {
-        let (graph, _) = SceneKind::Diagnostics.build();
+        let graph = SceneKind::Diagnostics.build().graph;
         let view = ViewGraph::from_graph(&graph);
         let levels = node_levels(&view);
         // Make node #2 (blobcount) dominate: it should be on the critical path.
@@ -187,7 +187,7 @@ mod tests {
 
     #[test]
     fn summary_parallel_le_serial() {
-        let (graph, _) = SceneKind::Tracker.build();
+        let graph = SceneKind::Tracker.build().graph;
         let view = ViewGraph::from_graph(&graph);
         let levels = node_levels(&view);
         let lat = vec![Duration::from_micros(100); view.nodes.len()];

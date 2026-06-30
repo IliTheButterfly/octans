@@ -10,11 +10,14 @@ pub mod layout;
 pub mod log_panel;
 pub mod model;
 pub mod profiler;
+pub mod pyxis;
 pub mod scene;
 pub mod schedule;
 
 use eframe::egui;
-use octans_core::{Diagnostic, Fault, Graph, Mira, NodeId, Tick, Value};
+use octans_core::{
+    Diagnostic, Fault, Graph, Mira, NodeId, StrategyHandle, Tick, TuneResult, Value,
+};
 use scene::SceneKind;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
@@ -191,16 +194,22 @@ pub struct OctansApp {
     pub(crate) history: HashMap<(usize, &'static str), VecDeque<Vec<f64>>>,
     /// Cached image textures, with the tick they were uploaded on.
     pub(crate) textures: HashMap<(usize, &'static str), (u64, egui::TextureHandle)>,
+
+    // autotuner / strategies (feature 4)
+    pub(crate) strategies: Vec<(NodeId, StrategyHandle)>,
+    pub(crate) tune_results: HashMap<usize, TuneResult>,
+    pub(crate) tune_warmup: usize,
+    pub(crate) tune_trials: usize,
 }
 
 impl OctansApp {
     pub fn new(_cc: &eframe::CreationContext<'_>, kind: SceneKind) -> Self {
-        let (graph, engine) = kind.build();
-        let view = model::ViewGraph::from_graph(&graph);
+        let scene = kind.build();
+        let view = model::ViewGraph::from_graph(&scene.graph);
         let layout = layout::layout(&view);
         Self {
-            graph,
-            engine,
+            graph: scene.graph,
+            engine: scene.engine,
             view,
             layout,
             scene_kind: kind,
@@ -219,6 +228,10 @@ impl OctansApp {
             values: HashMap::new(),
             history: HashMap::new(),
             textures: HashMap::new(),
+            strategies: scene.strategies,
+            tune_results: HashMap::new(),
+            tune_warmup: 2,
+            tune_trials: 5,
         }
     }
 
@@ -231,11 +244,12 @@ impl OctansApp {
 
     /// Rebuild everything for a fresh scene.
     pub fn set_scene(&mut self, kind: SceneKind) {
-        let (graph, engine) = kind.build();
-        self.view = model::ViewGraph::from_graph(&graph);
+        let scene = kind.build();
+        self.view = model::ViewGraph::from_graph(&scene.graph);
         self.layout = layout::layout(&self.view);
-        self.graph = graph;
-        self.engine = engine;
+        self.graph = scene.graph;
+        self.engine = scene.engine;
+        self.strategies = scene.strategies;
         self.scene_kind = kind;
         self.run = RunState::Stopped;
         self.accumulator = 0.0;
@@ -247,6 +261,7 @@ impl OctansApp {
         self.values.clear();
         self.history.clear();
         self.textures.clear();
+        self.tune_results.clear();
     }
 
     /// Fold one tick's results into the panels' state.
@@ -355,7 +370,10 @@ impl eframe::App for OctansApp {
         egui::SidePanel::left("schedule")
             .resizable(true)
             .default_width(240.0)
-            .show(ctx, |ui| self.schedule_ui(ui));
+            .show(ctx, |ui| {
+                self.autotuner_ui(ui);
+                self.schedule_ui(ui);
+            });
         egui::CentralPanel::default().show(ctx, |ui| self.canvas_ui(ui));
         self.inspector_window(ctx);
 
