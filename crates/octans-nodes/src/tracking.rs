@@ -91,12 +91,27 @@ impl Node for Triangulate {
         let pxs = inputs.get::<Vec<Value>>("px");
         let n = projs.len().min(pxs.len());
 
-        // Each view contributes two rows: x×(P·X)=0  ⇒  u·P[2] - P[0], v·P[2] - P[1].
-        let mut a = DMatrix::<f64>::zeros(2 * n, 4);
+        // Keep only finite correspondences — a NaN/Inf observation (or projection) would poison
+        // the whole solve, so drop it rather than emit garbage.
+        let mut views: Vec<(&Matrix3x4<f64>, f64, f64)> = Vec::with_capacity(n);
         for i in 0..n {
             let p = &projs[i].downcast_ref::<Proj>().expect("proj value").0;
             let px = pxs[i].downcast_ref::<Px>().expect("px value").0;
             let (u, v) = (px[0], px[1]);
+            if u.is_finite() && v.is_finite() && p.iter().all(|x| x.is_finite()) {
+                views.push((p, u, v));
+            }
+        }
+
+        // A 3D point is under-determined by fewer than two views: produce nothing (the consumer
+        // skips this tick) rather than triangulating noise.
+        if views.len() < 2 {
+            return;
+        }
+
+        // Each view contributes two rows: x×(P·X)=0  ⇒  u·P[2] - P[0], v·P[2] - P[1].
+        let mut a = DMatrix::<f64>::zeros(2 * views.len(), 4);
+        for (i, (p, u, v)) in views.iter().enumerate() {
             for k in 0..4 {
                 a[(2 * i, k)] = u * p[(2, k)] - p[(0, k)];
                 a[(2 * i + 1, k)] = v * p[(2, k)] - p[(1, k)];
@@ -104,11 +119,20 @@ impl Node for Triangulate {
         }
 
         // Solution = right singular vector of the smallest singular value (last row of Vᵀ).
-        let svd = a.svd(false, true);
-        let vt = svd.v_t.expect("V computed");
+        let Some(vt) = a.svd(false, true).v_t else {
+            return;
+        };
         let row = vt.row(vt.nrows() - 1);
         let w = row[3];
-        outputs.set("point", Pt3([row[0] / w, row[1] / w, row[2] / w]));
+        // A homogeneous w near zero means the cameras are degenerate (e.g. all collinear with
+        // the point) — the de-homogenized point would blow up. Reject it, and any non-finite.
+        if w.abs() < 1e-9 {
+            return;
+        }
+        let point = [row[0] / w, row[1] / w, row[2] / w];
+        if point.iter().all(|c| c.is_finite()) {
+            outputs.set("point", Pt3(point));
+        }
     }
 }
 
@@ -175,7 +199,9 @@ impl CameraSim {
 }
 
 /// Find the centroid of the bright (`255`) pixels in a mask and return it as a normalized image
-/// observation `(u, v) = ((cx - w/2)/f, (cy - h/2)/f)` — ready to triangulate.
+/// observation `(u, v) = ((cx - w/2)/f, (cy - h/2)/f)` — ready to triangulate. Returns `None`
+/// when the mask is empty (the target isn't visible this frame), so the observation is simply
+/// absent rather than a bogus `(0, 0)` that would corrupt triangulation.
 pub struct Centroid {
     pub w: usize,
     pub h: usize,
@@ -184,7 +210,7 @@ pub struct Centroid {
 
 #[node(id = "octans.track.centroid", out = "px")]
 impl Centroid {
-    fn process(&self, mask: &Image) -> Px {
+    fn process(&self, mask: &Image) -> Option<Px> {
         let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0.0f64);
         for y in 0..self.h {
             for x in 0..self.w {
@@ -196,11 +222,11 @@ impl Centroid {
             }
         }
         if n == 0.0 {
-            return Px([0.0, 0.0]);
+            return None; // nothing detected this frame
         }
-        Px([
+        Some(Px([
             (sx / n - self.w as f64 / 2.0) / self.f,
             (sy / n - self.h as f64 / 2.0) / self.f,
-        ])
+        ]))
     }
 }
