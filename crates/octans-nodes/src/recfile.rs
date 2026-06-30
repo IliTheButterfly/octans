@@ -167,6 +167,7 @@ pub struct Replayer {
     path: PathBuf,
     schema: Vec<(&'static str, TypeId)>,
     frames: OnceLock<Vec<Frame>>,
+    loop_frames: bool,
 }
 
 impl Replayer {
@@ -204,7 +205,16 @@ impl Replayer {
             path,
             schema,
             frames: OnceLock::new(),
+            loop_frames: false,
         })
+    }
+
+    /// Loop the recording: once past the last frame, wrap back to the first. Handy for feeding a
+    /// finite recording into a long-running consumer — e.g. the autotuner, which needs many ticks
+    /// to benchmark each strategy variant.
+    pub fn looping(mut self) -> Self {
+        self.loop_frames = true;
+        self
     }
 
     /// Build a replayer with an **author-declared** schema instead of reading it from the file
@@ -216,6 +226,7 @@ impl Replayer {
             path: path.into(),
             schema: schema.iter().map(|(n, id)| (leak(n), *id)).collect(),
             frames: OnceLock::new(),
+            loop_frames: false,
         }
     }
 }
@@ -282,13 +293,24 @@ impl Node for Replayer {
     }
 
     fn process(&self, ctx: &Context, _l: &mut dyn Any, _i: &Inputs, outputs: &mut Outputs) {
-        // Ticks start at 1; frame 0 is the first recorded tick.
-        let idx = (ctx.tick() as usize).saturating_sub(1);
-        if let Some(frame) = self.frames.get().and_then(|f| f.get(idx)) {
+        let Some(frames) = self.frames.get() else {
+            return;
+        };
+        if frames.is_empty() {
+            return;
+        }
+        // Ticks start at 1; frame 0 is the first recorded tick. Past the end we emit nothing
+        // (downstream skips), unless looping — then we wrap back to the start.
+        let raw = (ctx.tick() as usize).saturating_sub(1);
+        let idx = if self.loop_frames {
+            raw % frames.len()
+        } else {
+            raw
+        };
+        if let Some(frame) = frames.get(idx) {
             for (name, v) in frame {
                 outputs.set_value(name, v.clone());
             }
         }
-        // Past the end: emit nothing — downstream consumers skip this tick.
     }
 }

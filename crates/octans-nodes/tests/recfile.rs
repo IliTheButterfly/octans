@@ -252,6 +252,97 @@ fn record_then_replay_reproduces_a_multi_type_stream() {
 }
 
 #[test]
+fn autotune_over_replayed_frames_picks_a_verified_equivalent_variant() {
+    let (w, h, f) = (64usize, 64usize, 100.0f64);
+    let path = record_path("octans_autotune.rec");
+    let _ = std::fs::remove_file(&path);
+
+    // --- record a few frames of a single static camera ---
+    {
+        let mut reg = Registry::new();
+        register_primitives(&mut reg);
+        register_node_types(&mut reg);
+        register_tracking_types(&mut reg);
+        let mut g = Graph::new(reg);
+        let pt = g.add(MovingPoint {
+            start: [0.0, 0.0, 5.0],
+            vel: [0.0, 0.0, 0.0],
+        });
+        let sim = g.add(CameraSim {
+            center: [0.0, 0.0, 0.0],
+            w,
+            h,
+            f,
+        });
+        g.connect(pt, "point", sim, "point").unwrap();
+        let rec = g.add(Recorder::new(&path).channel::<Image>("frame"));
+        g.connect(sim, "frame", rec, "frame").unwrap();
+        let mut engine = Mira::compile(&g).unwrap();
+        for _ in 0..4 {
+            engine.run_tick(&g);
+        }
+    }
+
+    // --- autotune two equivalent detect variants over the looping recording ---
+    let replayer = Replayer::open(&path).expect("open recording").looping();
+
+    let mut reg = Registry::new();
+    register_primitives(&mut reg);
+    register_node_types(&mut reg);
+    register_tracking_types(&mut reg);
+    let mut g = Graph::new(reg);
+    let rep = g.add(replayer);
+
+    // variant 0 (reference): two-pass group; variant 1: fused single-pass node.
+    let two_pass = group("two_pass", move |gg| {
+        let t = gg.add(Threshold);
+        let c = gg.add(Centroid { w, h, f });
+        gg.connect(t, "mask", c, "mask");
+        gg.input("frame", t, "image");
+        gg.output("px", c, "px");
+    });
+    let strat = Strategy::builder()
+        .group("two_pass", &two_pass)
+        .node("fused", ThresholdCentroid { w, h, f, thr: 128 })
+        .build();
+    let handle = strat.handle();
+    let s = g.add(strat);
+    g.connect(rep, "frame", s, "frame").unwrap();
+
+    let mut engine = Mira::compile(&g).unwrap();
+    let results = engine.tune(
+        &g,
+        &[(s, handle.clone())],
+        TuneConfig {
+            warmup: 1,
+            trials: 3,
+        },
+    );
+
+    // The autotuner ran over replayed frames, verified the variants are equivalent (neither
+    // rejected), and selected one — which it does on the *end-user's* hardware, so we don't
+    // assert which won, only that it's a verified choice.
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0].rejected.is_empty(),
+        "both variants are bit-equivalent, none should be rejected: {:?}",
+        results[0].rejected
+    );
+    assert_eq!(handle.selected(), results[0].chosen);
+
+    // And the chosen variant still computes the right answer: the static blob sits at the image
+    // centre, so its normalized centroid is ~(0, 0).
+    let t = engine.run_tick(&g);
+    let px = t.output(s, "px").unwrap().downcast_ref::<Px>().unwrap().0;
+    assert!(
+        px[0].abs() < 0.01 && px[1].abs() < 0.01,
+        "centroid near image centre, got {px:?}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn replayer_with_explicit_schema_reads_a_headered_file() {
     let path = record_path("octans_with_schema.rec");
     let _ = std::fs::remove_file(&path);

@@ -240,3 +240,39 @@ impl Centroid {
         ]))
     }
 }
+
+/// A fused threshold+centroid: in one pass over the frame, take the centroid of all pixels at or
+/// above `thr` and return it as a normalized observation. Computes exactly the same `Px` as
+/// `Threshold` (default `128`) → `Centroid` — same pixel set, same accumulation order — but in a
+/// single pass with no intermediate mask allocation. A drop-in, bit-identical, faster variant: an
+/// honest choice for a `Strategy`/autotuner to pick (its boundary `frame → px` matches a
+/// `Threshold→Centroid` group's).
+pub struct ThresholdCentroid {
+    pub w: usize,
+    pub h: usize,
+    pub f: f64,
+    pub thr: u8,
+}
+
+#[node(id = "octans.track.threshold_centroid", out = "px")]
+impl ThresholdCentroid {
+    fn process(&self, frame: &Image) -> Option<Px> {
+        let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0.0f64);
+        for y in 0..self.h {
+            for x in 0..self.w {
+                if frame.px[y * self.w + x] >= self.thr {
+                    sx += x as f64;
+                    sy += y as f64;
+                    n += 1.0;
+                }
+            }
+        }
+        if n == 0.0 {
+            return None;
+        }
+        Some(Px([
+            (sx / n - self.w as f64 / 2.0) / self.f,
+            (sy / n - self.h as f64 / 2.0) / self.f,
+        ]))
+    }
+}
