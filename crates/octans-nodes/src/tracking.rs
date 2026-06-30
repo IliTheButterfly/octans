@@ -2,11 +2,13 @@
 //! engine. `Triangulate` recovers a 3D point from N cameras' 2D observations via the Direct
 //! Linear Transform (pure Rust, nalgebra SVD — no OpenCV).
 
+use crate::Image;
 use nalgebra::{DMatrix, Matrix3x4};
 use octans_core::{
     eq_via, Context, Inputs, Node, Outputs, PortSpec, RegisteredType, Registry, Shape,
     TypeDescriptor, TypeId, TypeSpec, Value,
 };
+use octans_macros::node;
 use std::any::Any;
 
 /// A 3×4 camera projection matrix `P` (so a homogeneous world point `X` projects to `P·X`).
@@ -107,5 +109,98 @@ impl Node for Triangulate {
         let row = vt.row(vt.nrows() - 1);
         let w = row[3];
         outputs.set("point", Pt3([row[0] / w, row[1] / w, row[2] / w]));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A synthetic end-to-end scene: a moving point, pinhole cameras, blob detection.
+// ---------------------------------------------------------------------------
+
+/// Ground-truth 3D point that drifts linearly with the tick: `start + vel * tick`.
+pub struct MovingPoint {
+    pub start: [f64; 3],
+    pub vel: [f64; 3],
+}
+
+#[node(id = "octans.track.moving_point", out = "point")]
+impl MovingPoint {
+    fn process(&self, #[ctx] ctx: &Context) -> Pt3 {
+        let t = ctx.tick() as f64;
+        Pt3([
+            self.start[0] + self.vel[0] * t,
+            self.start[1] + self.vel[1] * t,
+            self.start[2] + self.vel[2] * t,
+        ])
+    }
+}
+
+/// A pinhole camera at world position `center` (looking +z): renders a bright disk where the
+/// input 3D point projects. Pixel = `(u·f + w/2, v·f + h/2)` with `(u,v)` the normalized coords.
+/// Pair with `Proj::camera(center)` when triangulating.
+pub struct CameraSim {
+    pub center: [f64; 3],
+    pub w: usize,
+    pub h: usize,
+    pub f: f64,
+}
+
+#[node(id = "octans.track.camera_sim", out = "frame")]
+impl CameraSim {
+    fn process(&self, point: &Pt3) -> Image {
+        let mut px = vec![30u8; self.w * self.h]; // dim background
+        let rel = [
+            point.0[0] - self.center[0],
+            point.0[1] - self.center[1],
+            point.0[2] - self.center[2],
+        ];
+        if rel[2] > 0.0 {
+            let cx = (rel[0] / rel[2] * self.f + self.w as f64 / 2.0).round() as i32;
+            let cy = (rel[1] / rel[2] * self.f + self.h as f64 / 2.0).round() as i32;
+            let r = 6i32;
+            for y in (cy - r).max(0)..(cy + r + 1).min(self.h as i32) {
+                for x in (cx - r).max(0)..(cx + r + 1).min(self.w as i32) {
+                    let (dx, dy) = (x - cx, y - cy);
+                    if dx * dx + dy * dy <= r * r {
+                        px[y as usize * self.w + x as usize] = 220;
+                    }
+                }
+            }
+        }
+        Image {
+            w: self.w,
+            h: self.h,
+            px,
+        }
+    }
+}
+
+/// Find the centroid of the bright (`255`) pixels in a mask and return it as a normalized image
+/// observation `(u, v) = ((cx - w/2)/f, (cy - h/2)/f)` — ready to triangulate.
+pub struct Centroid {
+    pub w: usize,
+    pub h: usize,
+    pub f: f64,
+}
+
+#[node(id = "octans.track.centroid", out = "px")]
+impl Centroid {
+    fn process(&self, mask: &Image) -> Px {
+        let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0.0f64);
+        for y in 0..self.h {
+            for x in 0..self.w {
+                if mask.px[y * self.w + x] == 255 {
+                    sx += x as f64;
+                    sy += y as f64;
+                    n += 1.0;
+                }
+            }
+        }
+        if n == 0.0 {
+            return Px([0.0, 0.0]);
+        }
+        Px([
+            (sx / n - self.w as f64 / 2.0) / self.f,
+            (sy / n - self.h as f64 / 2.0) / self.f,
+        ])
     }
 }
