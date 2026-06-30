@@ -4,7 +4,7 @@
 //! plus edges), so the read-only viewer and the eventual editor share one model. The viewer simply
 //! never mutates it.
 
-use octans_core::{Graph, NodeId, Shape, TypeSpec};
+use octans_core::{Graph, NodeId, Shape, TypeSpec, TOMBSTONE_TYPE};
 
 /// One port (input or output) as the GUI needs it: a name and a human type label.
 #[derive(Clone, Debug)]
@@ -21,6 +21,8 @@ pub struct ViewNode {
     pub label: String,
     pub inputs: Vec<PortInfo>,
     pub outputs: Vec<PortInfo>,
+    /// A removed node's tombstone — kept for index alignment, but the GUI hides it.
+    pub dead: bool,
 }
 
 /// A connection as the GUI draws it.
@@ -76,6 +78,7 @@ impl ViewGraph {
                         optional: p.optional,
                     })
                     .collect(),
+                dead: node.node_type() == TOMBSTONE_TYPE,
             })
             .collect();
 

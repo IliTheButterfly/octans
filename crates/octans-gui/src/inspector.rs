@@ -132,11 +132,20 @@ impl OctansApp {
         };
 
         let mut open = true;
+        let mut delete = false;
         egui::Window::new(title)
             .open(&mut open)
             .default_width(280.0)
             .resizable(true)
             .show(ctx, |ui| {
+                if ui
+                    .button("🗑 delete node")
+                    .on_hover_text("or press Delete")
+                    .clicked()
+                {
+                    delete = true;
+                }
+                ui.separator();
                 if outs.is_empty() {
                     ui.weak("this node has no outputs (a sink)");
                     return;
@@ -161,7 +170,9 @@ impl OctansApp {
                     }
                 }
             });
-        if !open {
+        if delete {
+            self.delete_node(sel);
+        } else if !open {
             self.selected = None;
         }
     }

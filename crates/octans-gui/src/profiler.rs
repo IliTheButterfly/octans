@@ -49,10 +49,15 @@ impl OctansApp {
             ui.weak("graph does not compile — nothing to profile");
             return;
         };
-        // Build owned rows (no engine borrow held past this point).
+        // Build owned rows (no engine borrow held past this point); skip removed (tombstone) nodes.
         let mut rows: Vec<Row> = engine
             .profile()
             .iter()
+            .filter(|(id, _)| {
+                self.graph
+                    .node(*id)
+                    .is_some_and(|n| n.node_type() != octans_core::TOMBSTONE_TYPE)
+            })
             .map(|(id, st)| Row {
                 id,
                 ty: self.graph.node(id).map(|n| n.node_type()).unwrap_or("?"),

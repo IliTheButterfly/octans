@@ -86,6 +86,9 @@ impl OctansApp {
         let mut out_pin: HashMap<(usize, String), Pos2> = HashMap::new();
         let mut in_pin: HashMap<(usize, String), Pos2> = HashMap::new();
         for vn in &self.view.nodes {
+            if vn.dead {
+                continue;
+            }
             let r = self.layout.rects[vn.id.0];
             for (j, p) in vn.inputs.iter().enumerate() {
                 let wy = r.top() + TITLE_H + (j as f32 + 0.5) * PIN_ROW;
@@ -142,7 +145,11 @@ impl OctansApp {
         let pin_font = FontId::monospace((10.0 * zoom).max(6.0));
         let title_font = FontId::monospace((12.0 * zoom).max(7.0));
         let mut clicked: Option<NodeId> = None;
+        let mut drag: Option<(NodeId, egui::Vec2)> = None;
         for vn in &self.view.nodes {
+            if vn.dead {
+                continue;
+            }
             let wr = self.layout.rects[vn.id.0];
             let r = cam.to_screen_rect(wr, origin);
             painter.rect_filled(r, CornerRadius::same(4), node_fill(vn.id, &self.last_tick));
@@ -223,8 +230,15 @@ impl OctansApp {
                 );
             }
 
-            // Hover for details; click to select (opens the inspector).
-            let resp = ui.interact(r, egui::Id::new(("node", vn.id.0)), egui::Sense::click());
+            // Hover for details; click to select (opens the inspector); drag to reposition.
+            let resp = ui.interact(
+                r,
+                egui::Id::new(("node", vn.id.0)),
+                egui::Sense::click_and_drag(),
+            );
+            if resp.dragged() {
+                drag = Some((vn.id, resp.drag_delta()));
+            }
             if resp.clicked() {
                 clicked = Some(vn.id);
             }
@@ -277,6 +291,13 @@ impl OctansApp {
             } else {
                 Some(id)
             };
+        }
+        // Apply a node drag: move it in world space and remember the manual position.
+        if let Some((id, d)) = drag {
+            let size = self.layout.rects[id.0].size();
+            let pos = self.layout.rects[id.0].min + d / zoom;
+            self.manual_pos.insert(id.0, pos);
+            self.layout.rects[id.0] = egui::Rect::from_min_size(pos, size);
         }
 
         // --- wiring: drag an output pin onto an input pin to connect; right-click an input to

@@ -4,10 +4,31 @@
 //! the offending nodes/ports — the perennial gap in every previous attempt
 //! (`IncompatibleTypes` was defined but never enforced). Here it is enforced from day one.
 
-use crate::node::Node;
+use crate::context::Context;
+use crate::node::{Inputs, Node, Outputs, PortSpec};
 use crate::portal::Portal;
 use crate::registry::Registry;
 use crate::value::{TypeSpec, Value};
+use std::any::Any;
+
+/// Node-type id of the inert placeholder left behind by [`Graph::remove_node`].
+pub const TOMBSTONE_TYPE: &str = "octans.core.tombstone";
+
+/// A removed node's placeholder: no ports, does nothing. Replacing a removed node with this keeps
+/// every other `NodeId` valid (they are positional indices), so deletion never renumbers.
+struct Tombstone;
+impl Node for Tombstone {
+    fn node_type(&self) -> &'static str {
+        TOMBSTONE_TYPE
+    }
+    fn inputs(&self) -> Vec<PortSpec> {
+        Vec::new()
+    }
+    fn outputs(&self) -> Vec<PortSpec> {
+        Vec::new()
+    }
+    fn process(&self, _: &Context, _: &mut dyn Any, _: &Inputs, _: &mut Outputs) {}
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct NodeId(pub usize);
@@ -111,6 +132,18 @@ impl Graph {
         to_port: &str,
     ) -> Result<(), ConnectError> {
         make_edge(&self.registry, &self.nodes, from, from_port, to, to_port).map(|_| ())
+    }
+
+    /// Remove a node, replacing it with an inert [`Tombstone`] and dropping every edge that touched
+    /// it. Tombstoning keeps all other `NodeId`s valid — deletion must never renumber, since ids
+    /// are positional indices that edges and engine state key on. The freed slot is not reused.
+    pub fn remove_node(&mut self, id: NodeId) {
+        if id.0 >= self.nodes.len() {
+            return;
+        }
+        self.edges
+            .retain(|e| e.from_node != id.0 && e.to_node != id.0);
+        self.nodes[id.0] = Box::new(Tombstone);
     }
 
     /// Remove every edge feeding the input `(to, to_port)`; returns how many were removed. Safe

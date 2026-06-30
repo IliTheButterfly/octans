@@ -209,6 +209,8 @@ pub struct OctansApp {
     pub(crate) show_palette: bool,
     /// Transient message from the last rejected edit (e.g. a type-mismatched wire).
     pub(crate) edit_error: Option<String>,
+    /// Manual node positions (world top-left), overriding auto-layout where set. Keyed by NodeId.0.
+    pub(crate) manual_pos: HashMap<usize, egui::Pos2>,
 }
 
 impl OctansApp {
@@ -247,7 +249,29 @@ impl OctansApp {
             catalog,
             show_palette: false,
             edit_error: None,
+            manual_pos: HashMap::new(),
         }
+    }
+
+    /// Recompute auto-layout, then apply any manual node positions on top (so dragged nodes stay
+    /// put across edits while new/untouched nodes auto-place).
+    pub(crate) fn relayout(&mut self) {
+        self.layout = layout::layout(&self.view);
+        for (id, pos) in &self.manual_pos {
+            if let Some(r) = self.layout.rects.get_mut(*id) {
+                *r = egui::Rect::from_min_size(*pos, r.size());
+            }
+        }
+    }
+
+    /// Remove a node (tombstone — keeps other NodeIds stable) and recompile.
+    pub(crate) fn delete_node(&mut self, id: NodeId) {
+        self.graph.remove_node(id);
+        self.manual_pos.remove(&id.0);
+        if self.selected == Some(id) {
+            self.selected = None;
+        }
+        self.rebuild_after_edit();
     }
 
     /// Connect two ports (replacing any existing wire into the target), validating first so a
@@ -291,7 +315,7 @@ impl OctansApp {
     /// rather than refusing the edit. Resets per-tick display state (a new engine has no history).
     pub(crate) fn rebuild_after_edit(&mut self) {
         self.view = model::ViewGraph::from_graph(&self.graph);
-        self.layout = layout::layout(&self.view);
+        self.relayout();
         match Mira::compile(&self.graph) {
             Ok(m) => {
                 self.engine = Some(m);
@@ -319,7 +343,8 @@ impl OctansApp {
     pub fn set_scene(&mut self, kind: SceneKind) {
         let scene = kind.build();
         self.view = model::ViewGraph::from_graph(&scene.graph);
-        self.layout = layout::layout(&self.view);
+        self.manual_pos.clear();
+        self.relayout();
         self.graph = scene.graph;
         self.engine = Some(scene.engine);
         self.compile_error = None;
@@ -469,6 +494,13 @@ impl eframe::App for OctansApp {
         egui::CentralPanel::default().show(ctx, |ui| self.canvas_ui(ui));
         self.inspector_window(ctx);
         self.palette_window(ctx);
+
+        // Delete the selected node with the Delete key (unless a text field has focus).
+        if let Some(sel) = self.selected {
+            if ctx.input(|i| i.key_pressed(egui::Key::Delete)) && !ctx.wants_keyboard_input() {
+                self.delete_node(sel);
+            }
+        }
 
         // While playing, schedule the next repaint at the tick rate — *not* every monitor frame —
         // so we don't spin the CPU. When stopped/stepping we request nothing and egui idles

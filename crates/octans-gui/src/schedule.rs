@@ -43,7 +43,9 @@ pub fn schedule_summary(
     let mut serial = Duration::ZERO;
     let mut parallel = Duration::ZERO;
     for l in 0..=max_level {
-        let members: Vec<usize> = (0..view.nodes.len()).filter(|&i| levels[i] == l).collect();
+        let members: Vec<usize> = (0..view.nodes.len())
+            .filter(|&i| levels[i] == l && !view.nodes[i].dead)
+            .collect();
         if members.is_empty() {
             continue;
         }
