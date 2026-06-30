@@ -207,6 +207,8 @@ pub struct OctansApp {
     // node catalog / palette (editor groundwork)
     pub(crate) catalog: Catalog,
     pub(crate) show_palette: bool,
+    /// Transient message from the last rejected edit (e.g. a type-mismatched wire).
+    pub(crate) edit_error: Option<String>,
 }
 
 impl OctansApp {
@@ -244,6 +246,32 @@ impl OctansApp {
             tune_trials: 5,
             catalog,
             show_palette: false,
+            edit_error: None,
+        }
+    }
+
+    /// Connect two ports (replacing any existing wire into the target), validating first so a
+    /// rejected wire doesn't drop the old one. Recompiles on success; records `edit_error` on
+    /// failure. Returns whether the graph changed.
+    pub(crate) fn try_connect(
+        &mut self,
+        from: NodeId,
+        from_port: &str,
+        to: NodeId,
+        to_port: &str,
+    ) -> bool {
+        match self.graph.can_connect(from, from_port, to, to_port) {
+            Ok(()) => {
+                self.graph.disconnect_input(to, to_port);
+                let _ = self.graph.connect(from, from_port, to, to_port);
+                self.edit_error = None;
+                self.rebuild_after_edit();
+                true
+            }
+            Err(e) => {
+                self.edit_error = Some(format!("{e:?}"));
+                false
+            }
         }
     }
 
@@ -394,6 +422,10 @@ impl OctansApp {
                     egui::Color32::from_rgb(240, 90, 90),
                     format!("⚠ won't compile: {err}"),
                 );
+            }
+            if let Some(err) = &self.edit_error {
+                ui.separator();
+                ui.colored_label(egui::Color32::from_rgb(230, 170, 70), format!("✗ {err}"));
             }
         });
     }

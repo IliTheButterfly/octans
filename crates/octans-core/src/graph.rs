@@ -100,6 +100,29 @@ impl Graph {
         Ok(())
     }
 
+    /// Validate a prospective connection without mutating the graph (same rules as `connect`).
+    /// Lets a UI check a wire before committing — e.g. to refuse it, or to replace an existing
+    /// edge only when the new one is actually valid.
+    pub fn can_connect(
+        &self,
+        from: NodeId,
+        from_port: &str,
+        to: NodeId,
+        to_port: &str,
+    ) -> Result<(), ConnectError> {
+        make_edge(&self.registry, &self.nodes, from, from_port, to, to_port).map(|_| ())
+    }
+
+    /// Remove every edge feeding the input `(to, to_port)`; returns how many were removed. Safe
+    /// w.r.t. `NodeId` indices — only edges are dropped, nodes are untouched (unlike node removal,
+    /// which would renumber). Used by the editor to disconnect / replace a wire.
+    pub fn disconnect_input(&mut self, to: NodeId, to_port: &str) -> usize {
+        let before = self.edges.len();
+        self.edges
+            .retain(|e| !(e.to_node == to.0 && e.to_port == to_port));
+        before - self.edges.len()
+    }
+
     // --- read-only introspection (for tooling outside the crate, e.g. the GUI) ---
 
     /// Number of node instances in the (flattened) graph.

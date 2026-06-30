@@ -278,6 +278,76 @@ impl OctansApp {
                 Some(id)
             };
         }
+
+        // --- wiring: drag an output pin onto an input pin to connect; right-click an input to
+        // disconnect. Pin interactions are allocated last, so they win the pointer over nodes. ---
+        let pin_r = 6.0 * zoom.max(0.6);
+        let mut rubber: Option<(Pos2, Pos2)> = None;
+        let mut connect: Option<(NodeId, String, NodeId, String)> = None;
+        let mut disconnect: Option<(NodeId, String)> = None;
+
+        for ((nid, port), &p) in &out_pin {
+            let rect = egui::Rect::from_center_size(p, egui::Vec2::splat(2.0 * pin_r));
+            let resp = ui.interact(
+                rect,
+                egui::Id::new(("outpin", nid, port)),
+                egui::Sense::drag(),
+            );
+            if resp.dragged() {
+                if let Some(cur) = resp.interact_pointer_pos() {
+                    rubber = Some((p, cur));
+                }
+            }
+            if resp.drag_stopped() {
+                if let Some(cur) = resp.interact_pointer_pos() {
+                    // nearest input pin within reach
+                    let mut best: Option<(usize, String, f32)> = None;
+                    for ((tn, tp), &q) in &in_pin {
+                        let d = q.distance(cur);
+                        if d < 16.0 * zoom.max(0.6)
+                            && best.as_ref().is_none_or(|(_, _, bd)| d < *bd)
+                        {
+                            best = Some((*tn, tp.clone(), d));
+                        }
+                    }
+                    if let Some((tn, tp, _)) = best {
+                        connect = Some((NodeId(*nid), port.clone(), NodeId(tn), tp));
+                    }
+                }
+            }
+        }
+        for ((nid, port), &p) in &in_pin {
+            let rect = egui::Rect::from_center_size(p, egui::Vec2::splat(2.0 * pin_r));
+            let resp = ui.interact(
+                rect,
+                egui::Id::new(("inpin", nid, port)),
+                egui::Sense::click(),
+            );
+            if resp.secondary_clicked() {
+                disconnect = Some((NodeId(*nid), port.clone()));
+            }
+            if resp.hovered() {
+                resp.on_hover_text("right-click to disconnect");
+            }
+        }
+
+        if let Some((a, b)) = rubber {
+            let dx = ((b.x - a.x).abs() * 0.5).max(30.0 * zoom);
+            painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                [a, pos2(a.x + dx, a.y), pos2(b.x - dx, b.y), b],
+                false,
+                Color32::TRANSPARENT,
+                Stroke::new(2.0, Color32::from_rgb(232, 194, 64)),
+            ));
+        }
+        if let Some((fnode, fport, tnode, tport)) = connect {
+            self.try_connect(fnode, &fport, tnode, &tport);
+        }
+        if let Some((tnode, tport)) = disconnect {
+            if self.graph.disconnect_input(tnode, &tport) > 0 {
+                self.rebuild_after_edit();
+            }
+        }
     }
 }
 
