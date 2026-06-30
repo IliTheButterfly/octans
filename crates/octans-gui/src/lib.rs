@@ -5,6 +5,7 @@
 //! test`/`clippy` compile but never execute — so CI never needs a display.
 
 pub mod canvas;
+pub mod inspector;
 pub mod layout;
 pub mod log_panel;
 pub mod model;
@@ -13,9 +14,9 @@ pub mod scene;
 pub mod schedule;
 
 use eframe::egui;
-use octans_core::{Diagnostic, Fault, Graph, Mira, NodeId, Tick};
+use octans_core::{Diagnostic, Fault, Graph, Mira, NodeId, Tick, Value};
 use scene::SceneKind;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 /// Format a duration compactly (ms above 1ms, else µs). Shared by the profiler/schedule panels.
@@ -181,6 +182,15 @@ pub struct OctansApp {
     pub(crate) show_latency_overlay: bool,
     pub(crate) show_critical_path: bool,
     pub(crate) profiler_sort: ProfileSort,
+
+    // data viewers (feature 3)
+    pub(crate) selected: Option<NodeId>,
+    /// Latest tick's outputs, keyed by (node, port). `Value` is `Arc`-backed → cheap to clone.
+    pub(crate) values: HashMap<(usize, &'static str), Value>,
+    /// Recent numeric components per output port, for sparklines.
+    pub(crate) history: HashMap<(usize, &'static str), VecDeque<Vec<f64>>>,
+    /// Cached image textures, with the tick they were uploaded on.
+    pub(crate) textures: HashMap<(usize, &'static str), (u64, egui::TextureHandle)>,
 }
 
 impl OctansApp {
@@ -205,6 +215,10 @@ impl OctansApp {
             show_latency_overlay: false,
             show_critical_path: false,
             profiler_sort: ProfileSort::default(),
+            selected: None,
+            values: HashMap::new(),
+            history: HashMap::new(),
+            textures: HashMap::new(),
         }
     }
 
@@ -229,11 +243,29 @@ impl OctansApp {
         self.last_tick = None;
         self.log.clear();
         self.camera = Camera::default();
+        self.selected = None;
+        self.values.clear();
+        self.history.clear();
+        self.textures.clear();
     }
 
     /// Fold one tick's results into the panels' state.
     pub fn ingest_tick(&mut self, tick: Tick) {
         self.log.extend(tick.diagnostics.iter().cloned());
+
+        // Capture this tick's outputs (Arc clones — cheap) and append numeric history.
+        self.values.clear();
+        for (id, port, val) in tick.outputs() {
+            self.values.insert((id.0, port), val.clone());
+            if let Some(comps) = inspector::scalar_components(val) {
+                let h = self.history.entry((id.0, port)).or_default();
+                h.push_back(comps);
+                while h.len() > 120 {
+                    h.pop_front();
+                }
+            }
+        }
+
         let faulted = tick.faults.iter().map(|f| f.node).collect();
         let skipped = tick.skipped.iter().copied().collect();
         self.last_tick = Some(TickSnapshot {
@@ -325,6 +357,7 @@ impl eframe::App for OctansApp {
             .default_width(240.0)
             .show(ctx, |ui| self.schedule_ui(ui));
         egui::CentralPanel::default().show(ctx, |ui| self.canvas_ui(ui));
+        self.inspector_window(ctx);
 
         // While playing, schedule the next repaint at the tick rate — *not* every monitor frame —
         // so we don't spin the CPU. When stopped/stepping we request nothing and egui idles

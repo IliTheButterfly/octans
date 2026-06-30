@@ -141,6 +141,7 @@ impl OctansApp {
         // Nodes on top.
         let pin_font = FontId::monospace((10.0 * zoom).max(6.0));
         let title_font = FontId::monospace((12.0 * zoom).max(7.0));
+        let mut clicked: Option<NodeId> = None;
         for vn in &self.view.nodes {
             let wr = self.layout.rects[vn.id.0];
             let r = cam.to_screen_rect(wr, origin);
@@ -151,6 +152,14 @@ impl OctansApp {
                 node_stroke(vn.id, &self.last_tick)
             };
             painter.rect_stroke(r, CornerRadius::same(4), stroke, StrokeKind::Inside);
+            if self.selected == Some(vn.id) {
+                painter.rect_stroke(
+                    r.expand(2.0),
+                    CornerRadius::same(5),
+                    Stroke::new(2.0, Color32::from_rgb(110, 170, 240)),
+                    StrokeKind::Outside,
+                );
+            }
 
             let faulted = self
                 .last_tick
@@ -210,8 +219,11 @@ impl OctansApp {
                 );
             }
 
-            // Hover for details: state (ok / faulted + message / skipped) and typed ports.
+            // Hover for details; click to select (opens the inspector).
             let resp = ui.interact(r, egui::Id::new(("node", vn.id.0)), egui::Sense::click());
+            if resp.clicked() {
+                clicked = Some(vn.id);
+            }
             if resp.hovered() {
                 let last = &self.last_tick;
                 resp.on_hover_ui(|ui| {
@@ -252,6 +264,15 @@ impl OctansApp {
                     }
                 });
             }
+        }
+
+        // Apply selection after the loop (toggling off if the same node is clicked again).
+        if let Some(id) = clicked {
+            self.selected = if self.selected == Some(id) {
+                None
+            } else {
+                Some(id)
+            };
         }
     }
 }
