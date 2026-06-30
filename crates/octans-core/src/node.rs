@@ -11,6 +11,7 @@
 //! `process` signature (`#[local] s: &mut State`, `#[ctx] ctx: &Context`, and input params).
 
 use crate::context::Context;
+use crate::registry::Registry;
 use crate::value::{TypeSpec, Value};
 use std::any::Any;
 use std::collections::HashMap;
@@ -92,6 +93,11 @@ pub trait Node: Send + Sync {
     fn new_local(&self) -> Box<dyn Any + Send> {
         Box::new(())
     }
+
+    /// Compile-time preparation, called once by `Mira::compile` with the registry in scope.
+    /// Default: nothing. `Map` uses this to build + validate a group body's sub-plan (the one
+    /// place that needs the registry, which isn't available at construction time).
+    fn prepare(&self, _registry: &Registry) {}
 
     fn process(&self, ctx: &Context, local: &mut dyn Any, inputs: &Inputs, outputs: &mut Outputs);
 }

@@ -24,22 +24,22 @@ use crate::value::{TypeSpec, Value};
 use std::collections::HashMap;
 
 /// A connection recorded inside a builder (local indices), validated at inline time.
-struct PendingEdge {
-    from: usize,
-    from_port: &'static str,
-    to: usize,
-    to_port: &'static str,
+pub(crate) struct PendingEdge {
+    pub(crate) from: usize,
+    pub(crate) from_port: &'static str,
+    pub(crate) to: usize,
+    pub(crate) to_port: &'static str,
 }
 
 /// Accumulates a group body: child nodes, internal (unchecked) connections, internal portals,
 /// and the boundary-port → inner-endpoint maps.
 #[derive(Default)]
 pub struct GroupBuilder {
-    nodes: Vec<Box<dyn Node>>,
-    edges: Vec<PendingEdge>,
-    portals: Vec<Portal>,
-    boundary_in: HashMap<&'static str, (usize, &'static str)>,
-    boundary_out: HashMap<&'static str, (usize, &'static str)>,
+    pub(crate) nodes: Vec<Box<dyn Node>>,
+    pub(crate) edges: Vec<PendingEdge>,
+    pub(crate) portals: Vec<Portal>,
+    pub(crate) boundary_in: HashMap<&'static str, (usize, &'static str)>,
+    pub(crate) boundary_out: HashMap<&'static str, (usize, &'static str)>,
 }
 
 impl GroupBuilder {
@@ -107,7 +107,7 @@ pub struct GroupTemplate {
 }
 
 impl GroupTemplate {
-    fn build_fresh(&self) -> GroupBuilder {
+    pub(crate) fn build_fresh(&self) -> GroupBuilder {
         let mut gb = GroupBuilder::default();
         (self.build)(&mut gb);
         gb
