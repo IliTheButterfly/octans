@@ -32,7 +32,7 @@ pub use context::Context;
 pub use gather::{Gather, Scatter};
 pub use graph::{ConnectError, Graph, NodeId};
 pub use group::{group, GroupBuilder, GroupInstance, GroupTemplate};
-pub use interp::{CompileError, Mira, Tick};
+pub use interp::{CompileError, Mira, Tick, TuneConfig, TuneResult};
 pub use map::Map;
 pub use node::{Inputs, Node, Outputs, PortSpec};
 pub use portal::{Portal, PortalRead, PortalWrite};

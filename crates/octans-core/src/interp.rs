@@ -13,6 +13,7 @@ use crate::context::Context;
 use crate::graph::{Edge, Graph, NodeId};
 use crate::node::{Inputs, Node, Outputs};
 use crate::profile::Profile;
+use crate::strategy::StrategyHandle;
 use crate::value::Value;
 use rayon::prelude::*;
 use std::any::Any;
@@ -253,6 +254,79 @@ impl Mira {
             latency: start.elapsed(),
             store,
         }
+    }
+}
+
+/// How long to benchmark each variant when autotuning.
+pub struct TuneConfig {
+    pub warmup: usize,
+    pub trials: usize,
+}
+
+impl Default for TuneConfig {
+    fn default() -> Self {
+        Self {
+            warmup: 2,
+            trials: 5,
+        }
+    }
+}
+
+/// The outcome of tuning one [`Strategy`](crate::strategy::Strategy) node.
+pub struct TuneResult {
+    pub node: NodeId,
+    pub chosen: usize,
+    pub chosen_name: &'static str,
+    /// Best (min) observed latency per variant, in declaration order.
+    pub per_variant_best: Vec<Duration>,
+}
+
+impl Mira {
+    /// Autotune: for each strategy node, benchmark every variant on the live graph (the
+    /// profiler measures the node's latency; we take the min over trials to shrug off noise) and
+    /// select the fastest. Greedy per strategy.
+    ///
+    /// v1 is **speed-only**: variants are assumed output-equivalent (author-asserted). Verify-by-
+    /// default (differential-test the variants' outputs) is the planned next step — it needs a
+    /// registered per-type comparator.
+    pub fn tune(
+        &mut self,
+        graph: &Graph,
+        strategies: &[(NodeId, StrategyHandle)],
+        cfg: TuneConfig,
+    ) -> Vec<TuneResult> {
+        let mut results = Vec::new();
+        for (sid, handle) in strategies {
+            let count = handle.variant_count();
+            let mut best = vec![Duration::MAX; count];
+            for (v, slot) in best.iter_mut().enumerate() {
+                handle.select(v);
+                for _ in 0..cfg.warmup {
+                    self.run_tick(graph);
+                }
+                for _ in 0..cfg.trials {
+                    self.run_tick(graph);
+                    let t = self.profile().node(*sid).last;
+                    if t < *slot {
+                        *slot = t;
+                    }
+                }
+            }
+            let chosen = best
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, d)| **d)
+                .map(|(v, _)| v)
+                .unwrap_or(0);
+            handle.select(chosen);
+            results.push(TuneResult {
+                node: *sid,
+                chosen,
+                chosen_name: handle.variant_name(chosen),
+                per_variant_best: best,
+            });
+        }
+        results
     }
 }
 
