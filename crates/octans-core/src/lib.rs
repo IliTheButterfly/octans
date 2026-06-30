@@ -31,7 +31,7 @@ pub mod strategy;
 pub mod value;
 pub mod viz;
 
-pub use context::Context;
+pub use context::{Context, Diagnostic, LogLevel};
 pub use control::{Loop, Switch};
 pub use gather::{Gather, Scatter};
 pub use graph::{ConnectError, Graph, NodeId};

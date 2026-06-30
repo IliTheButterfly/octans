@@ -12,11 +12,11 @@ use octans_macros::node;
 use std::any::Any;
 
 /// A 3×4 camera projection matrix `P` (so a homogeneous world point `X` projects to `P·X`).
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Proj(pub Matrix3x4<f64>);
 
 /// A 2D image observation (normalized/undistorted coords).
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Px(pub [f64; 2]);
 
 /// A 3D point.

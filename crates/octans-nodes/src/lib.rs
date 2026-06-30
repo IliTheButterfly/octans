@@ -12,6 +12,8 @@ use octans_core::{
 use octans_macros::node;
 use serde::{Deserialize, Serialize};
 
+pub mod diag;
+pub use diag::*;
 pub mod tracking;
 pub use tracking::*;
 
@@ -59,6 +61,14 @@ pub struct Image {
 
 impl RegisteredType for Image {
     const ID: TypeId = T_IMAGE;
+}
+
+// Concise Debug (dimensions only) so an `Image` is loggable/probeable without dumping the whole
+// pixel buffer.
+impl std::fmt::Debug for Image {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Image({}x{})", self.w, self.h)
+    }
 }
 
 /// Register the standard node-library types into a [`Registry`].

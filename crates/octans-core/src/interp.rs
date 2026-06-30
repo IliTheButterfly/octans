@@ -9,7 +9,7 @@
 //! Group bodies inside `Map` use the sequential [`run_order`] (they're small and already inside
 //! a parallel lane).
 
-use crate::context::Context;
+use crate::context::{Context, Diagnostic};
 use crate::graph::{Edge, Graph, NodeId};
 use crate::node::{Inputs, Node, Outputs};
 use crate::profile::Profile;
@@ -338,11 +338,13 @@ impl Mira {
             portal.swap();
         }
 
+        let diagnostics = ctx.take_diagnostics();
         Tick {
             latency: start.elapsed(),
             store,
             faults,
             skipped,
+            diagnostics,
         }
     }
 }
@@ -456,6 +458,8 @@ pub struct Tick {
     store: Store,
     pub faults: Vec<Fault>,
     pub skipped: Vec<NodeId>,
+    /// Diagnostics emitted by nodes this tick (e.g. `Log`/`Probe`), in no particular order.
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 impl Tick {
