@@ -18,6 +18,7 @@ use crate::value::Value;
 use rayon::prelude::*;
 use std::any::Any;
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
 /// A keyed map of values produced this tick: `(node index, output port) -> value`.
@@ -28,9 +29,38 @@ type Injected = HashMap<(usize, &'static str), Value>;
 /// The `(port, value)` outputs a single node produced.
 type NodeOutputs = Vec<(&'static str, Value)>;
 
+/// A node that failed during a tick — recorded on the [`Tick`] instead of crashing the engine.
+#[derive(Debug, Clone)]
+pub struct Fault {
+    pub node: NodeId,
+    pub message: String,
+}
+
+/// The outcome of evaluating one node in a tick.
+enum Eval {
+    /// Ran to completion; carries the `(port, value)` pairs it wrote.
+    Produced(NodeOutputs),
+    /// `process` panicked; carries the panic message. The engine keeps running.
+    Faulted(String),
+}
+
+/// Best-effort extraction of a panic payload's message (`&str` / `String`, else a placeholder).
+fn panic_message(payload: Box<dyn Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "node panicked (non-string payload)".to_string()
+    }
+}
+
 /// Evaluate one node: gather its inputs (injected boundary feeds, then connected edges, then
 /// unconnected ports' defaults), run it, and return its outputs. Reads `store` immutably, so it
 /// is safe to call concurrently for independent nodes in a level.
+///
+/// `process` is run inside [`catch_unwind`](std::panic::catch_unwind): a panicking node yields
+/// [`Eval::Faulted`] rather than unwinding through the parallel tick and aborting the engine.
 fn eval_node(
     nid: usize,
     nodes: &[Box<dyn Node>],
@@ -39,7 +69,7 @@ fn eval_node(
     ctx: &Context,
     local: &mut dyn Any,
     injected: &Injected,
-) -> NodeOutputs {
+) -> Eval {
     let mut inmap: HashMap<&'static str, Value> = HashMap::new();
     for e in edges {
         if e.to_node == nid {
@@ -62,9 +92,17 @@ fn eval_node(
     }
 
     let inputs = Inputs { map: inmap };
-    let mut outputs = Outputs::default();
-    nodes[nid].process(ctx, local, &inputs, &mut outputs);
-    outputs.map.into_iter().collect()
+    let node = &nodes[nid];
+    // A panic here must not unwind across rayon's join boundary and abort the whole tick.
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let mut outputs = Outputs::default();
+        node.process(ctx, local, &inputs, &mut outputs);
+        outputs
+    }));
+    match result {
+        Ok(outputs) => Eval::Produced(outputs.map.into_iter().collect()),
+        Err(payload) => Eval::Faulted(panic_message(payload)),
+    }
 }
 
 /// Run `order` sequentially, returning every value produced. Used for `Map` group bodies.
@@ -82,10 +120,14 @@ pub(crate) fn run_order(
     for &nid in order {
         let local: &mut dyn Any = &mut *locals[nid];
         let t0 = Instant::now();
-        let outs = eval_node(nid, nodes, edges, &store, ctx, local, injected);
+        let ev = eval_node(nid, nodes, edges, &store, ctx, local, injected);
         timings.push((nid, t0.elapsed()));
-        for (port, val) in outs {
-            store.insert((nid, port), val);
+        // Inside a Map lane, a faulting body node degrades gracefully: it simply produces no
+        // outputs (the top-level tick is what surfaces faults to the caller).
+        if let Eval::Produced(outs) = ev {
+            for (port, val) in outs {
+                store.insert((nid, port), val);
+            }
         }
     }
     store
@@ -100,33 +142,42 @@ fn run_levels(
     locals: &mut [Box<dyn Any + Send>],
     ctx: &Context,
     profile: &mut Profile,
-) -> Store {
+) -> (Store, Vec<Fault>) {
     let mut store: Store = HashMap::new();
+    let mut faults: Vec<Fault> = Vec::new();
     let empty: Injected = HashMap::new();
 
     for level in 0..=max_level {
         // All nodes at this level are mutually independent: run them concurrently, each with a
         // disjoint `&mut` to its own state, reading the frozen `store` by shared reference.
-        let produced: Vec<(usize, NodeOutputs, Duration)> = locals
+        let produced: Vec<(usize, Eval, Duration)> = locals
             .par_iter_mut()
             .enumerate()
             .filter(|(i, _)| level_of[*i] == level)
             .map(|(nid, local)| {
                 let l: &mut dyn Any = &mut **local;
                 let t0 = Instant::now();
-                let outs = eval_node(nid, nodes, edges, &store, ctx, l, &empty);
-                (nid, outs, t0.elapsed())
+                let ev = eval_node(nid, nodes, edges, &store, ctx, l, &empty);
+                (nid, ev, t0.elapsed())
             })
             .collect();
 
-        for (nid, outs, dur) in produced {
-            for (port, val) in outs {
-                store.insert((nid, port), val);
+        for (nid, ev, dur) in produced {
+            match ev {
+                Eval::Produced(outs) => {
+                    for (port, val) in outs {
+                        store.insert((nid, port), val);
+                    }
+                }
+                Eval::Faulted(message) => faults.push(Fault {
+                    node: NodeId(nid),
+                    message,
+                }),
             }
             profile.record(nid, dur);
         }
     }
-    store
+    (store, faults)
 }
 
 /// Topologically sort `num_nodes` by `deps` (`(from, to)` pairs), Kahn. Reused for the top
@@ -235,7 +286,7 @@ impl Mira {
         } = self;
         ctx.advance();
 
-        let store = run_levels(
+        let (store, faults) = run_levels(
             &graph.nodes,
             &graph.edges,
             level_of,
@@ -253,6 +304,7 @@ impl Mira {
         Tick {
             latency: start.elapsed(),
             store,
+            faults,
         }
     }
 }
@@ -357,14 +409,22 @@ impl Mira {
     }
 }
 
-/// The result of one tick: latency + the values each node produced (for inspection/sinks).
+/// The result of one tick: latency, the values each node produced (for inspection/sinks), and
+/// any faults — nodes whose `process` panicked. A non-empty `faults` means the tick still
+/// completed (the engine isolated those nodes); inspect it instead of relying on a clean run.
 pub struct Tick {
     pub latency: Duration,
     store: Store,
+    pub faults: Vec<Fault>,
 }
 
 impl Tick {
     pub fn output(&self, node: NodeId, port: &'static str) -> Option<&Value> {
         self.store.get(&(node.0, port))
+    }
+
+    /// True if every node ran without panicking this tick.
+    pub fn ok(&self) -> bool {
+        self.faults.is_empty()
     }
 }
