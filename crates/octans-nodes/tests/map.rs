@@ -87,11 +87,11 @@ fn map_applies_inner_per_element() {
         items: vec![1, 2, 3],
     });
     let m = g.add(Map::new(Increment));
-    g.connect(src, "items", m, "items").unwrap();
+    g.connect(src, "items", m, "x").unwrap();
 
     let mut engine = Mira::compile(&g).unwrap();
     let tick = engine.run_tick(&g);
-    assert_eq!(as_u32s(tick.output(m, "items").unwrap()), vec![2, 3, 4]);
+    assert_eq!(as_u32s(tick.output(m, "out").unwrap()), vec![2, 3, 4]);
 }
 
 #[test]
@@ -104,12 +104,12 @@ fn map_gives_each_lane_independent_state() {
         items: vec![10, 20, 30],
     });
     let m = g.add(Map::new(Accumulate));
-    g.connect(src, "items", m, "items").unwrap();
+    g.connect(src, "items", m, "x").unwrap();
 
     let mut engine = Mira::compile(&g).unwrap();
     let mut last = Vec::new();
     for _ in 0..3 {
-        last = as_u64s(engine.run_tick(&g).output(m, "items").unwrap());
+        last = as_u64s(engine.run_tick(&g).output(m, "sum").unwrap());
     }
     // each lane accumulated ITS element three times, independently
     assert_eq!(last, vec![30, 60, 90]);

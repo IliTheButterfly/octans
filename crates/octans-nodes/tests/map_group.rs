@@ -73,13 +73,13 @@ fn map_over_group_fans_a_pipeline_per_frame() {
         ],
     });
     let m = graph.add(Map::group(&detect)); // fan the whole pipeline per frame
-    graph.connect(cam, "frames", m, "items").unwrap();
+    graph.connect(cam, "frames", m, "image").unwrap();
 
     let mut engine = Mira::compile(&graph).unwrap();
     let tick = engine.run_tick(&graph);
 
     let counts: Vec<u32> = tick
-        .output(m, "items")
+        .output(m, "count")
         .unwrap()
         .as_vector()
         .unwrap()

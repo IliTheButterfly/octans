@@ -1,18 +1,17 @@
-//! `Map` — data-parallel fan-out.
+//! `Map` — data-parallel fan-out, zipping K input vectors through a body into M output vectors.
 //!
-//! Applies a **body** to each element of a `Vector` input, producing a `Vector` output. The
-//! body is either a single unary node ([`Map::new`]) or a whole group/subgraph ([`Map::group`]
-//! — fan a pipeline over N cameras). Either way the body is run via the shared [`run_order`]
-//! pass, with the lane's element **injected** at the body's input boundary.
+//! The body is either a single node ([`Map::new`]) or a whole group/subgraph ([`Map::group`]).
+//! Map exposes one `Vector` input port per body boundary input (named after it) and one `Vector`
+//! output port per boundary output. Per lane `i` it injects element `i` of every input vector at
+//! the matching boundary, runs the body via [`run_order`], and collects each boundary output —
+//! i.e. it *zips* the inputs (e.g. per-camera `frames` ⨯ `calibrations`).
 //!
-//! Each lane gets its **own** copy of the body's local state, and lanes run in **parallel** via
-//! rayon — which compiles only because the state model is race-free: the body nodes are shared
-//! `&` (Send+Sync logic), the context is shared `&` (Sync), and each lane holds disjoint `&mut`
-//! to its own Send state. No locks.
+//! Each lane gets its own copy of the body's local state; lanes run in **parallel** via rayon —
+//! which compiles only because the state model is race-free (shared `&` Send+Sync body + ctx,
+//! disjoint `&mut` per-lane state). A group body's internal edges are validated against the
+//! registry in [`prepare`] (the lazy-build-at-compile design).
 //!
-//! For a group body, the internal edges are validated against the registry in [`prepare`]
-//! (where it's in scope), per the lazy-build-at-compile design. v1: exactly one boundary input
-//! and one boundary output; no portals inside a mapped group body.
+//! v1: no portals inside a mapped group body; all input vectors must share a length.
 
 use crate::context::Context;
 use crate::graph::{make_edge, Edge, NodeId};
@@ -26,7 +25,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// An internal body connection awaiting validation (group bodies only).
 struct BodyEdge {
     from: usize,
     from_port: &'static str,
@@ -34,95 +32,113 @@ struct BodyEdge {
     to_port: &'static str,
 }
 
+/// A vectorized boundary of the body: `name` is Map's port; `(node, port)` is the inner endpoint.
+struct Boundary {
+    name: &'static str,
+    node: usize,
+    port: &'static str,
+    ty: TypeSpec,
+}
+
 pub struct Map {
     body_nodes: Vec<Box<dyn Node>>,
     body_order: Vec<usize>,
-    pending: Vec<BodyEdge>, // unvalidated internal edges (empty for a single-node body)
-    edges: OnceLock<Vec<Edge>>, // validated at prepare (set immediately for a single-node body)
-    in_node: usize,
-    in_port: &'static str,
-    out_node: usize,
-    out_port: &'static str,
-    elem_in: TypeSpec,
-    elem_out: TypeSpec,
+    pending: Vec<BodyEdge>,
+    edges: OnceLock<Vec<Edge>>,
+    inputs: Vec<Boundary>,  // zipped input vectors
+    outputs: Vec<Boundary>, // result vectors
 }
 
 impl Map {
-    /// Map a single unary node (one required input, one output) over each element.
+    /// Map a single node over each element. Its **required** inputs become zipped input vectors
+    /// (optional/param inputs use their defaults per lane); its outputs become result vectors.
     pub fn new(inner: impl Node + 'static) -> Self {
         let inner: Box<dyn Node> = Box::new(inner);
-        let ins = inner.inputs();
-        let required: Vec<&PortSpec> = ins.iter().filter(|p| p.default.is_none()).collect();
-        assert_eq!(
-            required.len(),
-            1,
-            "Map::new wraps a unary node (exactly one required input); `{}` has {}",
-            inner.node_type(),
-            required.len()
+        let inputs: Vec<Boundary> = inner
+            .inputs()
+            .into_iter()
+            .filter(|p| p.default.is_none())
+            .map(|p| Boundary {
+                name: p.name,
+                node: 0,
+                port: p.name,
+                ty: p.ty,
+            })
+            .collect();
+        let outputs: Vec<Boundary> = inner
+            .outputs()
+            .into_iter()
+            .map(|p| Boundary {
+                name: p.name,
+                node: 0,
+                port: p.name,
+                ty: p.ty,
+            })
+            .collect();
+        assert!(
+            !inputs.is_empty(),
+            "Map::new needs a node with at least one required input; `{}` has none",
+            inner.node_type()
         );
-        let in_port = required[0].name;
-        let elem_in = required[0].ty.clone();
-        let outs = inner.outputs();
-        assert_eq!(
-            outs.len(),
-            1,
-            "Map::new wraps a node with exactly one output; `{}` has {}",
-            inner.node_type(),
-            outs.len()
+        assert!(
+            !outputs.is_empty(),
+            "Map::new needs a node with at least one output"
         );
-        let out_port = outs[0].name;
-        let elem_out = outs[0].ty.clone();
 
         let edges = OnceLock::new();
-        let _ = edges.set(Vec::new()); // no internal edges to validate
-
+        let _ = edges.set(Vec::new());
         Map {
             body_nodes: vec![inner],
             body_order: vec![0],
             pending: Vec::new(),
             edges,
-            in_node: 0,
-            in_port,
-            out_node: 0,
-            out_port,
-            elem_in,
-            elem_out,
+            inputs,
+            outputs,
         }
     }
 
-    /// Map a whole group/subgraph over each element (fan a pipeline over N lanes).
+    /// Map a whole group/subgraph over each element. Its boundary inputs become zipped input
+    /// vectors; its boundary outputs become result vectors.
     pub fn group(template: &GroupTemplate) -> Self {
         let gb = template.build_fresh();
         assert!(
             gb.portals.is_empty(),
             "Map::group v1 does not support portals inside a mapped body"
         );
-        assert_eq!(
-            gb.boundary_in.len(),
-            1,
-            "Map::group v1 needs exactly one boundary input"
-        );
-        assert_eq!(
-            gb.boundary_out.len(),
-            1,
-            "Map::group v1 needs exactly one boundary output"
-        );
 
-        let (_, (in_node, in_port)) = gb.boundary_in.into_iter().next().unwrap();
-        let (_, (out_node, out_port)) = gb.boundary_out.into_iter().next().unwrap();
-
-        let elem_in = gb.nodes[in_node]
-            .inputs()
-            .into_iter()
-            .find(|p| p.name == in_port)
-            .expect("boundary input names a real inner port")
-            .ty;
-        let elem_out = gb.nodes[out_node]
-            .outputs()
-            .into_iter()
-            .find(|p| p.name == out_port)
-            .expect("boundary output names a real inner port")
-            .ty;
+        let boundary =
+            |map: HashMap<&'static str, (usize, &'static str)>, is_input: bool| -> Vec<Boundary> {
+                map.into_iter()
+                    .map(|(name, (node, port))| {
+                        let ty = if is_input {
+                            gb.nodes[node].inputs().into_iter().find(|p| p.name == port)
+                        } else {
+                            gb.nodes[node]
+                                .outputs()
+                                .into_iter()
+                                .find(|p| p.name == port)
+                        }
+                        .expect("boundary names a real inner port")
+                        .ty;
+                        Boundary {
+                            name,
+                            node,
+                            port,
+                            ty,
+                        }
+                    })
+                    .collect()
+            };
+        let inputs = boundary(gb.boundary_in, true);
+        let outputs = boundary(gb.boundary_out, false);
+        assert!(
+            !inputs.is_empty(),
+            "Map::group needs at least one boundary input"
+        );
+        assert!(
+            !outputs.is_empty(),
+            "Map::group needs at least one boundary output"
+        );
 
         let pending: Vec<BodyEdge> = gb
             .edges
@@ -143,12 +159,8 @@ impl Map {
             body_order,
             pending,
             edges: OnceLock::new(),
-            in_node,
-            in_port,
-            out_node,
-            out_port,
-            elem_in,
-            elem_out,
+            inputs,
+            outputs,
         }
     }
 }
@@ -159,26 +171,35 @@ impl Node for Map {
     }
 
     fn inputs(&self) -> Vec<PortSpec> {
-        vec![PortSpec::new(
-            "items",
-            TypeSpec {
-                id: self.elem_in.id,
-                shape: Shape::Vector(None),
-            },
-        )]
+        self.inputs
+            .iter()
+            .map(|b| {
+                PortSpec::new(
+                    b.name,
+                    TypeSpec {
+                        id: b.ty.id,
+                        shape: Shape::Vector(None),
+                    },
+                )
+            })
+            .collect()
     }
 
     fn outputs(&self) -> Vec<PortSpec> {
-        vec![PortSpec::new(
-            "items",
-            TypeSpec {
-                id: self.elem_out.id,
-                shape: Shape::Vector(None),
-            },
-        )]
+        self.outputs
+            .iter()
+            .map(|b| {
+                PortSpec::new(
+                    b.name,
+                    TypeSpec {
+                        id: b.ty.id,
+                        shape: Shape::Vector(None),
+                    },
+                )
+            })
+            .collect()
     }
 
-    /// Validate the body's internal edges (registry in scope), and prepare body nodes.
     fn prepare(&self, registry: &Registry) {
         for n in &self.body_nodes {
             n.prepare(registry);
@@ -202,7 +223,6 @@ impl Node for Map {
         }
     }
 
-    /// Map's local state is the per-lane body states: `Vec<lane>` where `lane = Vec<node state>`.
     fn new_local(&self) -> Box<dyn Any + Send> {
         Box::new(Vec::<Vec<Box<dyn Any + Send>>>::new())
     }
@@ -215,36 +235,57 @@ impl Node for Map {
         let lanes = local
             .downcast_mut::<Vec<Vec<Box<dyn Any + Send>>>>()
             .expect("Map local state is per-lane body states");
-        let items: &Vec<Value> = inputs.get::<Vec<Value>>("items");
 
-        // Match the lane count to the input length (new lanes get fresh body state).
-        while lanes.len() < items.len() {
-            lanes.push(self.body_nodes.iter().map(|n| n.new_local()).collect());
+        // Gather + zip the input vectors (all must share a length).
+        let vecs: Vec<&Vec<Value>> = self
+            .inputs
+            .iter()
+            .map(|b| inputs.get::<Vec<Value>>(b.name))
+            .collect();
+        let n = vecs[0].len();
+        assert!(
+            vecs.iter().all(|v| v.len() == n),
+            "Map zip: all input vectors must share a length"
+        );
+
+        while lanes.len() < n {
+            lanes.push(self.body_nodes.iter().map(|nd| nd.new_local()).collect());
         }
-        lanes.truncate(items.len());
+        lanes.truncate(n);
 
-        let results: Vec<Value> = lanes
+        // Per lane: inject every input element, run the body, collect every output. (M values/lane.)
+        let per_lane: Vec<Vec<Value>> = lanes
             .par_iter_mut()
-            .zip(items.par_iter())
-            .map(|(lane_locals, item)| {
+            .enumerate()
+            .map(|(i, lane)| {
                 let mut injected: HashMap<(usize, &'static str), Value> = HashMap::new();
-                injected.insert((self.in_node, self.in_port), item.clone());
-
+                for (k, b) in self.inputs.iter().enumerate() {
+                    injected.insert((b.node, b.port), vecs[k][i].clone());
+                }
                 let store = run_order(
                     &self.body_nodes,
                     edges,
                     &self.body_order,
-                    lane_locals,
+                    lane,
                     ctx,
                     &injected,
                 );
-                store
-                    .get(&(self.out_node, self.out_port))
-                    .cloned()
-                    .expect("group body produced its declared output")
+                self.outputs
+                    .iter()
+                    .map(|b| {
+                        store
+                            .get(&(b.node, b.port))
+                            .cloned()
+                            .expect("group body produced its declared output")
+                    })
+                    .collect::<Vec<Value>>()
             })
             .collect();
 
-        outputs.set_value("items", Value::vector(results));
+        // Transpose lanes×outputs into one result vector per output port.
+        for (m, b) in self.outputs.iter().enumerate() {
+            let col: Vec<Value> = per_lane.iter().map(|row| row[m].clone()).collect();
+            outputs.set_value(b.name, Value::vector(col));
+        }
     }
 }

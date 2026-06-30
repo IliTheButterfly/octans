@@ -14,6 +14,7 @@
 //!   order, then runs ticks and times them.
 
 pub mod context;
+pub mod gather;
 pub mod graph;
 pub mod group;
 pub mod interp;
@@ -25,6 +26,7 @@ pub mod registry;
 pub mod value;
 
 pub use context::Context;
+pub use gather::{Gather, Scatter};
 pub use graph::{ConnectError, Graph, NodeId};
 pub use group::{group, GroupBuilder, GroupInstance, GroupTemplate};
 pub use interp::{CompileError, Mira, Tick};
