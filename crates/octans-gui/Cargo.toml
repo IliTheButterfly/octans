@@ -1,0 +1,18 @@
+[package]
+name = "octans-gui"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Octans realtime graph visualizer (read-only) — egui/eframe glow backend."
+
+[dependencies]
+octans-core = { path = "../octans-core" }
+octans-nodes = { path = "../octans-nodes" }
+# Default features give the glow (OpenGL) backend + x11/wayland — and NOT wgpu (it's opt-in), so
+# no discrete GPU is required. Disabling default features drops winit's Linux backends.
+eframe = "0.31"
+
+[[bin]]
+name = "octans-gui"
+path = "src/main.rs"

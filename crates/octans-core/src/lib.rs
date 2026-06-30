@@ -34,7 +34,7 @@ pub mod viz;
 pub use context::{Context, Diagnostic, LogLevel};
 pub use control::{Loop, Switch};
 pub use gather::{Gather, Scatter};
-pub use graph::{ConnectError, Graph, NodeId};
+pub use graph::{ConnectError, EdgeView, Graph, NodeId};
 pub use group::{group, GroupBuilder, GroupInstance, GroupTemplate};
 pub use interp::{CompileError, Fault, Mira, Tick, TuneConfig, TuneResult};
 pub use map::Map;

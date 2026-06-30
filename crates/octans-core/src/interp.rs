@@ -467,6 +467,12 @@ impl Tick {
         self.store.get(&(node.0, port))
     }
 
+    /// Iterate every value produced this tick as `(node, port, value)` — a read-only view over
+    /// the internal store (order unspecified). For tooling that inspects all outputs at once.
+    pub fn outputs(&self) -> impl Iterator<Item = (NodeId, &'static str, &Value)> + '_ {
+        self.store.iter().map(|((n, p), v)| (NodeId(*n), *p, v))
+    }
+
     /// True if every node ran without panicking this tick.
     pub fn ok(&self) -> bool {
         self.faults.is_empty()

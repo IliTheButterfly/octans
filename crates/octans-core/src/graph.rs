@@ -19,6 +19,16 @@ pub(crate) struct Edge {
     pub to_port: &'static str,
 }
 
+/// A read-only view of one connection, for introspection by tooling (e.g. the GUI) that lives
+/// outside this crate. Exposes [`NodeId`]s rather than the engine-internal positional indices.
+#[derive(Clone, Copy, Debug)]
+pub struct EdgeView {
+    pub from: NodeId,
+    pub from_port: &'static str,
+    pub to: NodeId,
+    pub to_port: &'static str,
+}
+
 /// A connection failure, carrying the ids/ports needed to light up the right node in a UI.
 #[derive(Debug)]
 pub enum ConnectError {
@@ -88,6 +98,36 @@ impl Graph {
         let edge = make_edge(&self.registry, &self.nodes, from, from_port, to, to_port)?;
         self.edges.push(edge);
         Ok(())
+    }
+
+    // --- read-only introspection (for tooling outside the crate, e.g. the GUI) ---
+
+    /// Number of node instances in the (flattened) graph.
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Iterate every node instance with its id, in insertion (`NodeId`) order.
+    pub fn nodes(&self) -> impl Iterator<Item = (NodeId, &dyn Node)> + '_ {
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (NodeId(i), n.as_ref()))
+    }
+
+    /// Borrow a single node by id, if it exists.
+    pub fn node(&self, id: NodeId) -> Option<&dyn Node> {
+        self.nodes.get(id.0).map(|n| n.as_ref())
+    }
+
+    /// Iterate every connection as a read-only [`EdgeView`].
+    pub fn edges(&self) -> impl Iterator<Item = EdgeView> + '_ {
+        self.edges.iter().map(|e| EdgeView {
+            from: NodeId(e.from_node),
+            from_port: e.from_port,
+            to: NodeId(e.to_node),
+            to_port: e.to_port,
+        })
     }
 }
 
