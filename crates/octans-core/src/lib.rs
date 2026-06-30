@@ -15,6 +15,7 @@
 
 pub(crate) mod body;
 pub mod context;
+pub mod control;
 pub mod gather;
 pub mod graph;
 pub mod group;
@@ -30,6 +31,7 @@ pub mod strategy;
 pub mod value;
 
 pub use context::Context;
+pub use control::{Loop, Switch};
 pub use gather::{Gather, Scatter};
 pub use graph::{ConnectError, Graph, NodeId};
 pub use group::{group, GroupBuilder, GroupInstance, GroupTemplate};
