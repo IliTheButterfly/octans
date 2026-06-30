@@ -63,6 +63,12 @@ impl Graph {
         NodeId(self.nodes.len() - 1)
     }
 
+    /// Add an already-boxed node (e.g. one built by a deserialization factory).
+    pub fn add_boxed(&mut self, node: Box<dyn Node>) -> NodeId {
+        self.nodes.push(node);
+        NodeId(self.nodes.len() - 1)
+    }
+
     /// Create a temporal feedback slot (z⁻¹). Use the returned [`Portal`] to make matching
     /// reader/writer nodes (`portal.reader(..)` / `portal.writer(..)`); the interpreter swaps
     /// it at each tick boundary so reads see the previous tick's write.
@@ -75,9 +81,9 @@ impl Graph {
     pub fn connect(
         &mut self,
         from: NodeId,
-        from_port: &'static str,
+        from_port: &str,
         to: NodeId,
-        to_port: &'static str,
+        to_port: &str,
     ) -> Result<(), ConnectError> {
         let edge = make_edge(&self.registry, &self.nodes, from, from_port, to, to_port)?;
         self.edges.push(edge);
@@ -91,9 +97,9 @@ pub(crate) fn make_edge(
     registry: &Registry,
     nodes: &[Box<dyn Node>],
     from: NodeId,
-    from_port: &'static str,
+    from_port: &str,
     to: NodeId,
-    to_port: &'static str,
+    to_port: &str,
 ) -> Result<Edge, ConnectError> {
     let out = nodes[from.0]
         .outputs()
@@ -127,10 +133,11 @@ pub(crate) fn make_edge(
         });
     }
 
+    // Store the nodes' own `'static` port names (the caller's `&str` may be borrowed/deserialized).
     Ok(Edge {
         from_node: from.0,
-        from_port,
+        from_port: out.name,
         to_node: to.0,
-        to_port,
+        to_port: inp.name,
     })
 }

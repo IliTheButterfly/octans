@@ -99,5 +99,12 @@ pub trait Node: Send + Sync {
     /// place that needs the registry, which isn't available at construction time).
     fn prepare(&self, _registry: &Registry) {}
 
+    /// This node's construction config as JSON, for serialization. Default: `null` (stateless /
+    /// not serializable). `#[node(serde)]` overrides it to serialize the node's fields; a
+    /// matching factory registered in a `NodeRegistry` reconstructs it.
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
     fn process(&self, ctx: &Context, local: &mut dyn Any, inputs: &Inputs, outputs: &mut Outputs);
 }

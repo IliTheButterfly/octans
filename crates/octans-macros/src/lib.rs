@@ -27,8 +27,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    parse_macro_input, punctuated::Punctuated, Expr, FnArg, ImplItem, ItemImpl, Lit, MetaNameValue,
-    Pat, ReturnType, Token, Type,
+    parse_macro_input, punctuated::Punctuated, Expr, FnArg, ImplItem, ItemImpl, Lit, Meta,
+    MetaNameValue, Pat, ReturnType, Token, Type,
 };
 
 enum Kind {
@@ -51,31 +51,44 @@ fn elem_of(ty: &Type) -> Type {
 
 #[proc_macro_attribute]
 pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
-    // ---- attribute args: id = "...", out = "..." ----
-    let args =
-        parse_macro_input!(attr with Punctuated::<MetaNameValue, Token![,]>::parse_terminated);
+    // ---- attribute args: id = "...", out = "...", and the bare flag `serde` ----
+    let args = parse_macro_input!(attr with Punctuated::<Meta, Token![,]>::parse_terminated);
     let mut id: Option<String> = None;
     let mut out_name = String::from("out");
-    for nv in args {
-        let key = nv
-            .path
-            .get_ident()
-            .map(|i| i.to_string())
-            .unwrap_or_default();
-        let val = match &nv.value {
-            Expr::Lit(e) => match &e.lit {
-                Lit::Str(s) => s.value(),
-                _ => String::new(),
-            },
-            _ => String::new(),
-        };
-        match key.as_str() {
-            "id" => id = Some(val),
-            "out" => out_name = val,
+    let mut want_serde = false;
+    for meta in args {
+        match meta {
+            Meta::Path(p) if p.is_ident("serde") => want_serde = true,
+            Meta::NameValue(nv) => {
+                let key = nv
+                    .path
+                    .get_ident()
+                    .map(|i| i.to_string())
+                    .unwrap_or_default();
+                let val = match &nv.value {
+                    Expr::Lit(e) => match &e.lit {
+                        Lit::Str(s) => s.value(),
+                        _ => String::new(),
+                    },
+                    _ => String::new(),
+                };
+                match key.as_str() {
+                    "id" => id = Some(val),
+                    "out" => out_name = val,
+                    other => {
+                        return syn::Error::new_spanned(
+                            &nv.path,
+                            format!("#[node]: unknown argument `{other}` (expected `id`, `out`, or `serde`)"),
+                        )
+                        .to_compile_error()
+                        .into()
+                    }
+                }
+            }
             other => {
                 return syn::Error::new_spanned(
-                    &nv.path,
-                    format!("#[node]: unknown argument `{other}` (expected `id` or `out`)"),
+                    other,
+                    "#[node]: expected `id = \"...\"`, `out = \"...\"`, or `serde`",
                 )
                 .to_compile_error()
                 .into()
@@ -232,6 +245,17 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         None => quote! { let () = #run; },
     };
 
+    // `serde` flag: serialize the node's fields as its config (requires the struct: Serialize).
+    let to_json_method = if want_serde {
+        quote! {
+            fn to_json(&self) -> ::serde_json::Value {
+                ::serde_json::to_value(self).unwrap_or(::serde_json::Value::Null)
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         #impl_block
 
@@ -246,6 +270,7 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
             fn new_local(&self) -> ::std::boxed::Box<dyn ::std::any::Any + ::std::marker::Send> {
                 #new_local_body
             }
+            #to_json_method
             fn process(
                 &self,
                 _ctx: &::octans_core::Context,

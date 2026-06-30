@@ -6,10 +6,11 @@
 //! the `Node` impl, the port specs, and the type-erase glue.
 
 use octans_core::{
-    Context, Inputs, Node, Outputs, PortSpec, RegisteredType, Registry, Shape, TypeDescriptor,
-    TypeId, TypeSpec, Value,
+    Context, Inputs, Node, NodeRegistry, Outputs, PortSpec, RegisteredType, Registry, Shape,
+    TypeDescriptor, TypeId, TypeSpec, Value,
 };
 use octans_macros::node;
+use serde::{Deserialize, Serialize};
 
 pub mod tracking;
 pub use tracking::*;
@@ -68,15 +69,24 @@ pub fn register_node_types(reg: &mut Registry) {
     );
 }
 
+/// Register deserialization factories for the serde-able standard nodes, so a `GraphSpec` can be
+/// rebuilt into a live graph.
+pub fn register_std_factories(reg: &mut NodeRegistry) {
+    reg.register_serde::<SyntheticCamera>("octans.std.synthetic_camera");
+    reg.register_serde::<Threshold>("octans.std.threshold");
+    reg.register_serde::<BlobCount>("octans.std.blob_count");
+}
+
 /// A source: emits a frame with known bright disks on a dim background. A *known* blob count
 /// lets the slice assert correctness, not just "it ran".
+#[derive(Serialize, Deserialize)]
 pub struct SyntheticCamera {
     pub w: usize,
     pub h: usize,
     pub blobs: Vec<(i32, i32, i32)>, // (cx, cy, r)
 }
 
-#[node(id = "octans.std.synthetic_camera", out = "frame")]
+#[node(id = "octans.std.synthetic_camera", out = "frame", serde)]
 impl SyntheticCamera {
     fn process(&self) -> Image {
         let mut px = vec![30u8; self.w * self.h]; // dim background
@@ -103,9 +113,10 @@ impl SyntheticCamera {
 ///
 /// `thr` is a **parameter port** (default `128`): leave it unconnected and it uses the default,
 /// or wire an optimizer to it to drive it per camera at runtime.
+#[derive(Serialize, Deserialize)]
 pub struct Threshold;
 
-#[node(id = "octans.std.threshold", out = "mask")]
+#[node(id = "octans.std.threshold", out = "mask", serde)]
 impl Threshold {
     fn process(&self, image: &Image, #[param(default = 128u8)] thr: &u8) -> Image {
         let t = *thr;
@@ -123,9 +134,10 @@ impl Threshold {
 }
 
 /// Count connected components of value `255` (4-connectivity flood fill).
+#[derive(Serialize, Deserialize)]
 pub struct BlobCount;
 
-#[node(id = "octans.std.blob_count", out = "count")]
+#[node(id = "octans.std.blob_count", out = "count", serde)]
 impl BlobCount {
     fn process(&self, mask: &Image) -> u32 {
         let (w, h) = (mask.w, mask.h);

@@ -25,6 +25,7 @@ pub mod portal;
 pub mod prims;
 pub mod profile;
 pub mod registry;
+pub mod serial;
 pub mod strategy;
 pub mod value;
 
@@ -39,5 +40,6 @@ pub use portal::{Portal, PortalRead, PortalWrite};
 pub use prims::register_primitives;
 pub use profile::{NodeStat, Profile};
 pub use registry::{eq_via, Comparator, Registry, TypeDescriptor};
+pub use serial::{BuildError, EdgeSpec, GraphSpec, NodeRegistry, NodeSpec};
 pub use strategy::{Strategy, StrategyBuilder, StrategyHandle};
 pub use value::{RegisteredType, Shape, TypeId, TypeSpec, Value};
