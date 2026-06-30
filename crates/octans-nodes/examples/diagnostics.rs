@@ -20,11 +20,14 @@ fn main() {
     let blobs = g.add(BlobCount);
     let probe = g.add(Probe::<u32>::new("blob-count"));
     let logger = g.add(Log::<u32>::warning("vision"));
+    // A format-string logger: {{count}} is filled from the like-named typed input.
+    let report = g.add(LogFmt::info("vision", "frame had {{count}} blobs").arg::<u32>("count"));
 
     g.connect(cam, "frame", thr, "image").unwrap();
     g.connect(thr, "mask", blobs, "mask").unwrap();
     g.connect(blobs, "count", probe, "in").unwrap();
     g.connect(probe, "out", logger, "value").unwrap();
+    g.connect(probe, "out", report, "count").unwrap();
 
     let mut engine = Mira::compile(&g).unwrap();
     for _ in 0..3 {

@@ -8,10 +8,16 @@
 //! Both are generic over the value type and require `Debug` (to render the message), so they're
 //! hand-written `Node` impls rather than `#[node]` (which doesn't do generics yet).
 
-use octans_core::{Context, Inputs, LogLevel, Node, Outputs, PortSpec, RegisteredType};
+use octans_core::{
+    Context, Inputs, LogLevel, Node, Outputs, PortSpec, RegisteredType, TypeSpec, Value,
+};
 use std::any::Any;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+
+fn leak(s: &str) -> &'static str {
+    Box::leak(s.to_string().into_boxed_str())
+}
 
 /// A sink that logs its input value at a fixed severity each tick, tagged with `source`.
 ///
@@ -102,5 +108,86 @@ impl<T: RegisteredType + Clone + Debug> Node for Probe<T> {
         let v = inputs.get::<T>("in");
         ctx.log(self.level, self.label.clone(), format!("{v:?}"));
         outputs.set("out", v.clone());
+    }
+}
+
+/// Renders a type-erased value of type `T` via its `Debug` impl (for [`LogFmt`] args).
+fn render_dbg<T: Any + Debug>(v: &Value) -> String {
+    v.downcast_ref::<T>()
+        .map(|x| format!("{x:?}"))
+        .unwrap_or_default()
+}
+
+type Render = fn(&Value) -> String;
+
+/// A logger driven by a **format string** with `{{name}}` placeholders. Each placeholder is
+/// filled by the value on the like-named typed input port. Declare ports (and their types) with
+/// [`arg`](LogFmt::arg):
+///
+/// ```ignore
+/// let l = LogFmt::warning("vision", "found {{n}} blobs near {{p}}")
+///     .arg::<u32>("n")
+///     .arg::<Pt3>("p");
+/// ```
+///
+/// Each tick it renders every arg (via `Debug`), substitutes them into the template, and emits a
+/// [`Diagnostic`](octans_core::Diagnostic) at the chosen severity. Args are required inputs, so if
+/// any is absent the node skips that tick (it never logs a half-filled template).
+pub struct LogFmt {
+    level: LogLevel,
+    source: String,
+    template: String,
+    args: Vec<(&'static str, TypeSpec, Render)>,
+}
+
+impl LogFmt {
+    pub fn new(level: LogLevel, source: impl Into<String>, template: impl Into<String>) -> Self {
+        Self {
+            level,
+            source: source.into(),
+            template: template.into(),
+            args: Vec::new(),
+        }
+    }
+    pub fn error(source: impl Into<String>, template: impl Into<String>) -> Self {
+        Self::new(LogLevel::Error, source, template)
+    }
+    pub fn warning(source: impl Into<String>, template: impl Into<String>) -> Self {
+        Self::new(LogLevel::Warning, source, template)
+    }
+    pub fn info(source: impl Into<String>, template: impl Into<String>) -> Self {
+        Self::new(LogLevel::Info, source, template)
+    }
+
+    /// Declare a typed input port named `name`; its value fills `{{name}}` in the template.
+    pub fn arg<T: RegisteredType + Debug>(mut self, name: &str) -> Self {
+        self.args
+            .push((leak(name), T::type_spec(), render_dbg::<T>));
+        self
+    }
+}
+
+impl Node for LogFmt {
+    fn node_type(&self) -> &'static str {
+        "octans.diag.log_fmt"
+    }
+    fn inputs(&self) -> Vec<PortSpec> {
+        self.args
+            .iter()
+            .map(|(name, ty, _)| PortSpec::new(name, ty.clone()))
+            .collect()
+    }
+    fn outputs(&self) -> Vec<PortSpec> {
+        Vec::new()
+    }
+    fn process(&self, ctx: &Context, _l: &mut dyn Any, inputs: &Inputs, _o: &mut Outputs) {
+        let mut msg = self.template.clone();
+        for (name, _ty, render) in &self.args {
+            if let Some(v) = inputs.get_value(name) {
+                let pat = ["{{", name, "}}"].concat();
+                msg = msg.replace(&pat, &render(v));
+            }
+        }
+        ctx.log(self.level, self.source.clone(), msg);
     }
 }

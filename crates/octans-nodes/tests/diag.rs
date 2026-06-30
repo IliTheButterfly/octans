@@ -76,10 +76,79 @@ fn log_skips_quietly_when_its_input_is_absent() {
     assert!(t2.skipped.contains(&logger));
 }
 
+#[test]
+fn log_fmt_fills_placeholders_from_typed_args() {
+    let mut reg = Registry::new();
+    register_primitives(&mut reg);
+    register_tracking_types(&mut reg);
+    let mut g = Graph::new(reg);
+
+    let count = g.add(Const42);
+    let point = g.add(ConstPoint);
+    let logger = g.add(
+        LogFmt::warning("vision", "found {{n}} blobs near {{p}}")
+            .arg::<i32>("n")
+            .arg::<Pt3>("p"),
+    );
+    g.connect(count, "out", logger, "n").unwrap();
+    g.connect(point, "out", logger, "p").unwrap();
+
+    let mut engine = Mira::compile(&g).unwrap();
+    let tick = engine.run_tick(&g);
+
+    assert_eq!(tick.diagnostics.len(), 1);
+    let d = &tick.diagnostics[0];
+    assert_eq!(d.level, LogLevel::Warning);
+    assert_eq!(d.source, "vision");
+    assert_eq!(d.message, "found 42 blobs near Pt3([1.0, 2.0, 3.0])");
+}
+
+#[test]
+fn log_fmt_skips_when_an_arg_is_absent() {
+    let mut reg = Registry::new();
+    register_primitives(&mut reg);
+    let mut g = Graph::new(reg);
+
+    let odd = g.add(OddOnly);
+    let always = g.add(Const42);
+    let logger = g.add(
+        LogFmt::info("evt", "{{a}} / {{b}}")
+            .arg::<i32>("a")
+            .arg::<i32>("b"),
+    );
+    g.connect(odd, "out", logger, "a").unwrap();
+    g.connect(always, "out", logger, "b").unwrap();
+
+    let mut engine = Mira::compile(&g).unwrap();
+    let t1 = engine.run_tick(&g); // odd present -> logs
+    let t2 = engine.run_tick(&g); // odd absent -> skipped, no half-filled template
+
+    assert_eq!(t1.diagnostics.len(), 1);
+    assert_eq!(t1.diagnostics[0].message, "1 / 42");
+    assert!(t2.diagnostics.is_empty());
+    assert!(t2.skipped.contains(&logger));
+}
+
 // --- tiny test-only source/sink nodes ---
 
 use octans_core::{Inputs, Node, Outputs, PortSpec};
 use std::any::Any;
+
+struct ConstPoint;
+impl Node for ConstPoint {
+    fn node_type(&self) -> &'static str {
+        "test.constpoint"
+    }
+    fn inputs(&self) -> Vec<PortSpec> {
+        vec![]
+    }
+    fn outputs(&self) -> Vec<PortSpec> {
+        vec![PortSpec::new("out", Pt3::type_spec())]
+    }
+    fn process(&self, _c: &Context, _l: &mut dyn Any, _i: &Inputs, o: &mut Outputs) {
+        o.set("out", Pt3([1.0, 2.0, 3.0]));
+    }
+}
 
 struct Const42;
 impl Node for Const42 {
