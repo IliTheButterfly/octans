@@ -10,7 +10,10 @@ use crate::node::Node;
 use crate::value::TypeSpec;
 use std::collections::BTreeMap;
 
-/// One node type's description for the palette.
+/// Constructs a fresh node instance of a catalog type.
+type NodeFactory = Box<dyn Fn() -> Box<dyn Node> + Send + Sync>;
+
+/// One node type's description for the palette, plus a factory to construct it.
 pub struct NodeClass {
     pub type_id: &'static str,
     pub display_name: String,
@@ -19,6 +22,7 @@ pub struct NodeClass {
     pub inputs: Vec<(String, TypeSpec, bool)>,
     /// Output ports: `(name, type)`.
     pub outputs: Vec<(String, TypeSpec)>,
+    factory: NodeFactory,
 }
 
 /// A set of node classes, grouped for browsing.
@@ -32,20 +36,26 @@ impl Catalog {
         Self::default()
     }
 
-    /// Register a node type from a sample instance. Display name and category are derived from the
-    /// type id (`octans.std.threshold` → category `std`, name `threshold`); ports are read off the
-    /// instance.
-    pub fn add(&mut self, node: &dyn Node) {
-        let id = node.node_type();
+    /// Register a node type from a constructor. A sample is built once to read its
+    /// `node_type()`/`inputs()`/`outputs()` (display name + category derived from the type id,
+    /// e.g. `octans.std.threshold` → category `std`, name `threshold`); the constructor is kept to
+    /// build fresh instances on demand (see [`make`](Catalog::make)).
+    pub fn add<N, F>(&mut self, make: F)
+    where
+        N: Node + 'static,
+        F: Fn() -> N + Send + Sync + 'static,
+    {
+        let sample = make();
+        let id = sample.node_type();
         let segs: Vec<&str> = id.split('.').collect();
         let category = if segs.len() >= 3 { segs[1] } else { "misc" }.to_string();
         let display_name = id.rsplit('.').next().unwrap_or(id).replace('_', " ");
-        let inputs = node
+        let inputs = sample
             .inputs()
             .into_iter()
             .map(|p| (p.name.to_string(), p.ty, p.optional))
             .collect();
-        let outputs = node
+        let outputs = sample
             .outputs()
             .into_iter()
             .map(|p| (p.name.to_string(), p.ty))
@@ -56,7 +66,13 @@ impl Catalog {
             category,
             inputs,
             outputs,
+            factory: Box::new(move || Box::new(make()) as Box<dyn Node>),
         });
+    }
+
+    /// Construct a fresh node of the given type, if it's registered.
+    pub fn make(&self, type_id: &str) -> Option<Box<dyn Node>> {
+        self.get(type_id).map(|c| (c.factory)())
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &NodeClass> {

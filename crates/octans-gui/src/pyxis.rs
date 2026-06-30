@@ -22,18 +22,21 @@ impl OctansApp {
             ui.add(egui::DragValue::new(&mut self.tune_trials).range(1..=50));
         });
 
-        if ui.button("⏱ Tune").clicked() {
+        if ui.button("⏱ Tune").clicked() && self.engine.is_some() {
             let cfg = TuneConfig {
                 warmup: self.tune_warmup,
                 trials: self.tune_trials,
             };
-            let results = self.engine.tune(&self.graph, &self.strategies, cfg);
-            self.tune_results.clear();
-            for r in results {
-                self.tune_results.insert(r.node.0, r);
-            }
-            // Refresh the displayed tick with the chosen variant now active.
-            let tick = self.engine.run_tick(&self.graph);
+            let tick = {
+                let engine = self.engine.as_mut().expect("checked is_some");
+                let results = engine.tune(&self.graph, &self.strategies, cfg);
+                self.tune_results.clear();
+                for r in results {
+                    self.tune_results.insert(r.node.0, r);
+                }
+                // Refresh the displayed tick with the chosen variant now active.
+                engine.run_tick(&self.graph)
+            };
             self.ingest_tick(tick);
         }
 

@@ -169,7 +169,9 @@ impl Default for ProfileSort {
 /// The application: owns the live graph + engine and the read-only view/run state.
 pub struct OctansApp {
     pub(crate) graph: Graph,
-    pub(crate) engine: Mira,
+    /// `None` when the current (edited) graph doesn't compile — see `compile_error`.
+    pub(crate) engine: Option<Mira>,
+    pub(crate) compile_error: Option<String>,
     pub(crate) view: model::ViewGraph,
     pub(crate) layout: layout::Layout,
 
@@ -216,7 +218,8 @@ impl OctansApp {
         octans_nodes::register_std_catalog(&mut catalog);
         Self {
             graph: scene.graph,
-            engine: scene.engine,
+            engine: Some(scene.engine),
+            compile_error: None,
             view,
             layout,
             scene_kind: kind,
@@ -245,10 +248,43 @@ impl OctansApp {
     }
 
     /// Per-node last-tick latency, index-aligned with `NodeId.0` (for the schedule/critical-path).
+    /// All zero when the graph doesn't currently compile.
     pub(crate) fn latencies(&self) -> Vec<Duration> {
-        (0..self.view.nodes.len())
-            .map(|i| self.engine.profile().node(NodeId(i)).last)
-            .collect()
+        match &self.engine {
+            Some(e) => (0..self.view.nodes.len())
+                .map(|i| e.profile().node(NodeId(i)).last)
+                .collect(),
+            None => vec![Duration::ZERO; self.view.nodes.len()],
+        }
+    }
+
+    /// Re-derive the view/layout from the (edited) graph and recompile the engine. The graph stays
+    /// editable even when invalid: on a compile error we drop the engine and surface the message,
+    /// rather than refusing the edit. Resets per-tick display state (a new engine has no history).
+    pub(crate) fn rebuild_after_edit(&mut self) {
+        self.view = model::ViewGraph::from_graph(&self.graph);
+        self.layout = layout::layout(&self.view);
+        match Mira::compile(&self.graph) {
+            Ok(m) => {
+                self.engine = Some(m);
+                self.compile_error = None;
+            }
+            Err(e) => {
+                self.engine = None;
+                self.compile_error = Some(format!("{e:?}"));
+            }
+        }
+        self.run = RunState::Stopped;
+        self.accumulator = 0.0;
+        self.tick_count = 0;
+        self.last_tick = None;
+        self.values.clear();
+        self.history.clear();
+        self.textures.clear();
+        self.tune_results.clear();
+        if self.selected.map(|n| n.0 >= self.graph.node_count()) == Some(true) {
+            self.selected = None;
+        }
     }
 
     /// Rebuild everything for a fresh scene.
@@ -257,7 +293,8 @@ impl OctansApp {
         self.view = model::ViewGraph::from_graph(&scene.graph);
         self.layout = layout::layout(&self.view);
         self.graph = scene.graph;
-        self.engine = scene.engine;
+        self.engine = Some(scene.engine);
+        self.compile_error = None;
         self.strategies = scene.strategies;
         self.scene_kind = kind;
         self.run = RunState::Stopped;
@@ -351,6 +388,13 @@ impl OctansApp {
             ui.separator();
             ui.checkbox(&mut self.show_latency_overlay, "latency overlay");
             ui.toggle_value(&mut self.show_palette, "🎨 palette");
+            if let Some(err) = &self.compile_error {
+                ui.separator();
+                ui.colored_label(
+                    egui::Color32::from_rgb(240, 90, 90),
+                    format!("⚠ won't compile: {err}"),
+                );
+            }
         });
     }
 }
@@ -361,7 +405,13 @@ impl eframe::App for OctansApp {
         let dt = ctx.input(|i| i.stable_dt);
         let n = ticks_to_run(self.run, self.tick_hz, dt, &mut self.accumulator);
         for _ in 0..n {
-            let tick = self.engine.run_tick(&self.graph);
+            let tick = {
+                let Some(engine) = self.engine.as_mut() else {
+                    self.run = RunState::Stopped;
+                    break;
+                };
+                engine.run_tick(&self.graph)
+            };
             self.ingest_tick(tick);
         }
         if self.run == RunState::Stepping {

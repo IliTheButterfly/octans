@@ -96,49 +96,49 @@ pub fn register_std_factories(reg: &mut NodeRegistry) {
 /// representative type/arity.
 pub fn register_std_catalog(cat: &mut Catalog) {
     // sources / image
-    cat.add(&SyntheticCamera {
+    cat.add(|| SyntheticCamera {
         w: 64,
         h: 64,
         blobs: vec![],
     });
-    cat.add(&Threshold);
-    cat.add(&BlobCount);
-    cat.add(&Report { label: "report" });
-    cat.add(&AutoThreshold {
+    cat.add(|| Threshold);
+    cat.add(|| BlobCount);
+    cat.add(|| Report { label: "report" });
+    cat.add(|| AutoThreshold {
         target: 1,
         gain: 1,
         min: 0,
         max: 255,
     });
     // tracking
-    cat.add(&MovingPoint {
+    cat.add(|| MovingPoint {
         start: [0.0; 3],
         vel: [0.0; 3],
     });
-    cat.add(&CameraSim {
+    cat.add(|| CameraSim {
         center: [0.0; 3],
         w: 64,
         h: 64,
         f: 100.0,
     });
-    cat.add(&Centroid {
+    cat.add(|| Centroid {
         w: 64,
         h: 64,
         f: 100.0,
     });
-    cat.add(&ThresholdCentroid {
+    cat.add(|| ThresholdCentroid {
         w: 64,
         h: 64,
         f: 100.0,
         thr: 128,
     });
-    cat.add(&Triangulate);
+    cat.add(|| Triangulate);
     // diagnostics (generic — sampled at a concrete type)
-    cat.add(&Log::<u32>::info("log"));
-    cat.add(&Probe::<u32>::new("probe"));
+    cat.add(|| Log::<u32>::info("log"));
+    cat.add(|| Probe::<u32>::new("probe"));
     // core structural / generic (representative type & arity)
-    cat.add(&Gather::new::<f64>(2));
-    cat.add(&Scatter::new::<f64>(2));
+    cat.add(|| Gather::new::<f64>(2));
+    cat.add(|| Scatter::new::<f64>(2));
 }
 
 /// A source: emits a frame with known bright disks on a dim background. A *known* blob count

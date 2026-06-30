@@ -126,17 +126,17 @@ impl OctansApp {
             }
         }
 
-        // Latency overlay normalization.
-        let max_last = if self.show_latency_overlay {
-            self.engine
+        // Latency overlay normalization (only when an engine is compiled).
+        let max_last = match (self.show_latency_overlay, self.engine.as_ref()) {
+            (true, Some(e)) => e
                 .profile()
                 .iter()
                 .map(|(_, s)| s.last.as_secs_f64())
                 .fold(0.0_f64, f64::max)
-                .max(1e-9)
-        } else {
-            0.0
+                .max(1e-9),
+            _ => 0.0,
         };
+        let overlay = self.show_latency_overlay && self.engine.is_some();
 
         // Nodes on top.
         let pin_font = FontId::monospace((10.0 * zoom).max(6.0));
@@ -203,8 +203,12 @@ impl OctansApp {
                 );
             }
 
-            if self.show_latency_overlay {
-                let last = self.engine.profile().node(vn.id).last.as_secs_f64();
+            if overlay {
+                let last = self
+                    .engine
+                    .as_ref()
+                    .map(|e| e.profile().node(vn.id).last.as_secs_f64())
+                    .unwrap_or(0.0);
                 let frac = (last / max_last) as f32;
                 painter.text(
                     cam.to_screen(pos2(wr.left() + 6.0, wr.bottom() - 14.0), origin),

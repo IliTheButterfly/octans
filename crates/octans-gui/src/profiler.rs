@@ -45,9 +45,12 @@ impl OctansApp {
         }
         ui.separator();
 
+        let Some(engine) = self.engine.as_ref() else {
+            ui.weak("graph does not compile — nothing to profile");
+            return;
+        };
         // Build owned rows (no engine borrow held past this point).
-        let mut rows: Vec<Row> = self
-            .engine
+        let mut rows: Vec<Row> = engine
             .profile()
             .iter()
             .map(|(id, st)| Row {
