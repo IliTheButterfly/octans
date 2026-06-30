@@ -14,6 +14,7 @@
 //!   order, then runs ticks and times them.
 
 pub(crate) mod body;
+pub mod catalog;
 pub mod context;
 pub mod control;
 pub mod gather;
@@ -31,6 +32,7 @@ pub mod strategy;
 pub mod value;
 pub mod viz;
 
+pub use catalog::{Catalog, NodeClass};
 pub use context::{Context, Diagnostic, LogLevel};
 pub use control::{Loop, Switch};
 pub use gather::{Gather, Scatter};

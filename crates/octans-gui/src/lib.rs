@@ -9,6 +9,7 @@ pub mod inspector;
 pub mod layout;
 pub mod log_panel;
 pub mod model;
+pub mod palette;
 pub mod profiler;
 pub mod pyxis;
 pub mod scene;
@@ -16,7 +17,7 @@ pub mod schedule;
 
 use eframe::egui;
 use octans_core::{
-    Diagnostic, Fault, Graph, Mira, NodeId, StrategyHandle, Tick, TuneResult, Value,
+    Catalog, Diagnostic, Fault, Graph, Mira, NodeId, StrategyHandle, Tick, TuneResult, Value,
 };
 use scene::SceneKind;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -200,6 +201,10 @@ pub struct OctansApp {
     pub(crate) tune_results: HashMap<usize, TuneResult>,
     pub(crate) tune_warmup: usize,
     pub(crate) tune_trials: usize,
+
+    // node catalog / palette (editor groundwork)
+    pub(crate) catalog: Catalog,
+    pub(crate) show_palette: bool,
 }
 
 impl OctansApp {
@@ -207,6 +212,8 @@ impl OctansApp {
         let scene = kind.build();
         let view = model::ViewGraph::from_graph(&scene.graph);
         let layout = layout::layout(&view);
+        let mut catalog = Catalog::new();
+        octans_nodes::register_std_catalog(&mut catalog);
         Self {
             graph: scene.graph,
             engine: scene.engine,
@@ -232,6 +239,8 @@ impl OctansApp {
             tune_results: HashMap::new(),
             tune_warmup: 2,
             tune_trials: 5,
+            catalog,
+            show_palette: false,
         }
     }
 
@@ -341,6 +350,7 @@ impl OctansApp {
 
             ui.separator();
             ui.checkbox(&mut self.show_latency_overlay, "latency overlay");
+            ui.toggle_value(&mut self.show_palette, "🎨 palette");
         });
     }
 }
@@ -376,6 +386,7 @@ impl eframe::App for OctansApp {
             });
         egui::CentralPanel::default().show(ctx, |ui| self.canvas_ui(ui));
         self.inspector_window(ctx);
+        self.palette_window(ctx);
 
         // While playing, schedule the next repaint at the tick rate — *not* every monitor frame —
         // so we don't spin the CPU. When stopped/stepping we request nothing and egui idles

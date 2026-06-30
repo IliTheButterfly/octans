@@ -6,8 +6,8 @@
 //! the `Node` impl, the port specs, and the type-erase glue.
 
 use octans_core::{
-    Context, Inputs, Node, NodeRegistry, Outputs, PortSpec, RegisteredType, Registry, Shape,
-    TypeDescriptor, TypeId, TypeSpec, Value,
+    Catalog, Context, Gather, Inputs, Node, NodeRegistry, Outputs, PortSpec, RegisteredType,
+    Registry, Scatter, Shape, TypeDescriptor, TypeId, TypeSpec, Value,
 };
 use octans_macros::node;
 use serde::{Deserialize, Serialize};
@@ -89,6 +89,56 @@ pub fn register_std_factories(reg: &mut NodeRegistry) {
     reg.register_serde::<SyntheticCamera>("octans.std.synthetic_camera");
     reg.register_serde::<Threshold>("octans.std.threshold");
     reg.register_serde::<BlobCount>("octans.std.blob_count");
+}
+
+/// Register the standard node types into a [`Catalog`] (for a GUI palette). Each entry is derived
+/// from a sample instance — see [`Catalog::add`]. Generic/structural nodes are sampled at a
+/// representative type/arity.
+pub fn register_std_catalog(cat: &mut Catalog) {
+    // sources / image
+    cat.add(&SyntheticCamera {
+        w: 64,
+        h: 64,
+        blobs: vec![],
+    });
+    cat.add(&Threshold);
+    cat.add(&BlobCount);
+    cat.add(&Report { label: "report" });
+    cat.add(&AutoThreshold {
+        target: 1,
+        gain: 1,
+        min: 0,
+        max: 255,
+    });
+    // tracking
+    cat.add(&MovingPoint {
+        start: [0.0; 3],
+        vel: [0.0; 3],
+    });
+    cat.add(&CameraSim {
+        center: [0.0; 3],
+        w: 64,
+        h: 64,
+        f: 100.0,
+    });
+    cat.add(&Centroid {
+        w: 64,
+        h: 64,
+        f: 100.0,
+    });
+    cat.add(&ThresholdCentroid {
+        w: 64,
+        h: 64,
+        f: 100.0,
+        thr: 128,
+    });
+    cat.add(&Triangulate);
+    // diagnostics (generic — sampled at a concrete type)
+    cat.add(&Log::<u32>::info("log"));
+    cat.add(&Probe::<u32>::new("probe"));
+    // core structural / generic (representative type & arity)
+    cat.add(&Gather::new::<f64>(2));
+    cat.add(&Scatter::new::<f64>(2));
 }
 
 /// A source: emits a frame with known bright disks on a dim background. A *known* blob count
