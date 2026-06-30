@@ -2,18 +2,19 @@
 //! runs a graph that's constantly changing under edits). Compiles a topological order once,
 //! owns each node's per-instance local state, and runs timed ticks.
 //!
-//! The per-tick pass is factored into [`run_order`] so it can be reused: `Map` runs a group
-//! body's plan per lane through the same machinery.
-//!
-//! v0 is single-threaded at the top level. The order already contains independent same-depth
-//! levels; a later engine (`Vega` JIT, `Canopus` AOT) is where those get scheduled across
-//! threads/GPU. The seam is deliberately here.
+//! The top-level graph runs **level-parallel** ([`run_levels`]): the topo order is grouped into
+//! depth-levels (antichains), and each level's mutually-independent nodes run concurrently via
+//! rayon — disjoint `&mut` per-node state, shared `&` reads from the frozen store. This is the
+//! task-parallel complement to `Map`'s data-parallelism (and the start of the `Vega` engine).
+//! Group bodies inside `Map` use the sequential [`run_order`] (they're small and already inside
+//! a parallel lane).
 
 use crate::context::Context;
 use crate::graph::{Edge, Graph, NodeId};
 use crate::node::{Inputs, Node, Outputs};
 use crate::profile::Profile;
 use crate::value::Value;
+use rayon::prelude::*;
 use std::any::Any;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -21,55 +22,106 @@ use std::time::{Duration, Instant};
 /// A keyed map of values produced this tick: `(node index, output port) -> value`.
 pub(crate) type Store = HashMap<(usize, &'static str), Value>;
 
-/// Run one pass over `order`, returning every value produced. Inputs to each node come from
-/// (1) `injected` boundary feeds, then (2) connected edges, then (3) unconnected ports'
-/// defaults. `locals[i]` is node `i`'s private state (exclusive `&mut`).
+type Injected = HashMap<(usize, &'static str), Value>;
+
+/// Evaluate one node: gather its inputs (injected boundary feeds, then connected edges, then
+/// unconnected ports' defaults), run it, and return its outputs. Reads `store` immutably, so it
+/// is safe to call concurrently for independent nodes in a level.
+fn eval_node(
+    nid: usize,
+    nodes: &[Box<dyn Node>],
+    edges: &[Edge],
+    store: &Store,
+    ctx: &Context,
+    local: &mut dyn Any,
+    injected: &Injected,
+) -> Vec<(&'static str, Value)> {
+    let mut inmap: HashMap<&'static str, Value> = HashMap::new();
+    for e in edges {
+        if e.to_node == nid {
+            if let Some(v) = store.get(&(e.from_node, e.from_port)) {
+                inmap.insert(e.to_port, v.clone());
+            }
+        }
+    }
+    for ((n, p), v) in injected {
+        if *n == nid {
+            inmap.entry(p).or_insert_with(|| v.clone());
+        }
+    }
+    for spec in nodes[nid].inputs() {
+        if !inmap.contains_key(spec.name) {
+            if let Some(d) = spec.default {
+                inmap.insert(spec.name, d);
+            }
+        }
+    }
+
+    let inputs = Inputs { map: inmap };
+    let mut outputs = Outputs::default();
+    nodes[nid].process(ctx, local, &inputs, &mut outputs);
+    outputs.map.into_iter().collect()
+}
+
+/// Run `order` sequentially, returning every value produced. Used for `Map` group bodies.
 pub(crate) fn run_order(
     nodes: &[Box<dyn Node>],
     edges: &[Edge],
     order: &[usize],
     locals: &mut [Box<dyn Any + Send>],
     ctx: &Context,
-    injected: &HashMap<(usize, &'static str), Value>,
+    injected: &Injected,
     timings: &mut Vec<(usize, Duration)>,
 ) -> Store {
     timings.clear();
     let mut store: Store = HashMap::new();
-
     for &nid in order {
-        let mut inmap: HashMap<&'static str, Value> = HashMap::new();
-        for e in edges {
-            if e.to_node == nid {
-                if let Some(v) = store.get(&(e.from_node, e.from_port)) {
-                    inmap.insert(e.to_port, v.clone());
-                }
-            }
-        }
-        for ((n, p), v) in injected {
-            if *n == nid {
-                inmap.entry(p).or_insert_with(|| v.clone());
-            }
-        }
-        for spec in nodes[nid].inputs() {
-            if !inmap.contains_key(spec.name) {
-                if let Some(d) = spec.default {
-                    inmap.insert(spec.name, d);
-                }
-            }
-        }
-
-        let inputs = Inputs { map: inmap };
-        let mut outputs = Outputs::default();
         let local: &mut dyn Any = &mut *locals[nid];
         let t0 = Instant::now();
-        nodes[nid].process(ctx, local, &inputs, &mut outputs);
+        let outs = eval_node(nid, nodes, edges, &store, ctx, local, injected);
         timings.push((nid, t0.elapsed()));
-
-        for (port, val) in outputs.map {
+        for (port, val) in outs {
             store.insert((nid, port), val);
         }
     }
+    store
+}
 
+/// Run the graph **level-parallel**: each depth-level's independent nodes run concurrently.
+fn run_levels(
+    nodes: &[Box<dyn Node>],
+    edges: &[Edge],
+    level_of: &[usize],
+    max_level: usize,
+    locals: &mut [Box<dyn Any + Send>],
+    ctx: &Context,
+    profile: &mut Profile,
+) -> Store {
+    let mut store: Store = HashMap::new();
+    let empty: Injected = HashMap::new();
+
+    for level in 0..=max_level {
+        // All nodes at this level are mutually independent: run them concurrently, each with a
+        // disjoint `&mut` to its own state, reading the frozen `store` by shared reference.
+        let produced: Vec<(usize, Vec<(&'static str, Value)>, Duration)> = locals
+            .par_iter_mut()
+            .enumerate()
+            .filter(|(i, _)| level_of[*i] == level)
+            .map(|(nid, local)| {
+                let l: &mut dyn Any = &mut **local;
+                let t0 = Instant::now();
+                let outs = eval_node(nid, nodes, edges, &store, ctx, l, &empty);
+                (nid, outs, t0.elapsed())
+            })
+            .collect();
+
+        for (nid, outs, dur) in produced {
+            for (port, val) in outs {
+                store.insert((nid, port), val);
+            }
+            profile.record(nid, dur);
+        }
+    }
     store
 }
 
@@ -106,7 +158,8 @@ pub(crate) fn topo_order(
 }
 
 pub struct Mira {
-    order: Vec<usize>,
+    level_of: Vec<usize>, // depth level per node (nodes at the same level run in parallel)
+    max_level: usize,
     locals: Vec<Box<dyn Any + Send>>, // one per node instance (indexed by NodeId)
     ctx: Context,
     profile: Profile,
@@ -120,8 +173,8 @@ pub enum CompileError {
 }
 
 impl Mira {
-    /// Compile the graph: topo-sort, give each node a chance to `prepare` (with the registry in
-    /// scope — e.g. `Map` builds its group body's sub-plan here), and allocate local state.
+    /// Compile the graph: topo-sort (cycle check), assign depth levels, let each node `prepare`
+    /// (registry in scope — e.g. `Map` builds its group body's sub-plan), and allocate state.
     pub fn compile(graph: &Graph) -> Result<Self, CompileError> {
         let deps: Vec<(usize, usize)> = graph
             .edges
@@ -129,12 +182,27 @@ impl Mira {
             .map(|e| (e.from_node, e.to_node))
             .collect();
         let order = topo_order(graph.nodes.len(), &deps)?;
+
+        // Depth level = 1 + max predecessor level (computed in dependency order).
+        let mut level_of = vec![0usize; graph.nodes.len()];
+        for &nid in &order {
+            let mut lvl = 0;
+            for e in &graph.edges {
+                if e.to_node == nid {
+                    lvl = lvl.max(level_of[e.from_node] + 1);
+                }
+            }
+            level_of[nid] = lvl;
+        }
+        let max_level = level_of.iter().copied().max().unwrap_or(0);
+
         for node in &graph.nodes {
             node.prepare(&graph.registry);
         }
         let locals = graph.nodes.iter().map(|node| node.new_local()).collect();
         Ok(Self {
-            order,
+            level_of,
+            max_level,
             locals,
             ctx: Context::new(),
             profile: Profile::with_len(graph.nodes.len()),
@@ -151,31 +219,27 @@ impl Mira {
         &self.profile
     }
 
-    /// Run one tick (one frame); returns its wall-clock latency.
+    /// Run one tick (one frame), level-parallel; returns its wall-clock latency.
     pub fn run_tick(&mut self, graph: &Graph) -> Tick {
         let start = Instant::now();
         let Mira {
-            order,
+            level_of,
+            max_level,
             locals,
             ctx,
             profile,
         } = self;
         ctx.advance();
 
-        let injected: HashMap<(usize, &'static str), Value> = HashMap::new();
-        let mut timings: Vec<(usize, Duration)> = Vec::new();
-        let store = run_order(
+        let store = run_levels(
             &graph.nodes,
             &graph.edges,
-            order,
+            level_of,
+            *max_level,
             locals,
             ctx,
-            &injected,
-            &mut timings,
+            profile,
         );
-        for (nid, dur) in &timings {
-            profile.record(*nid, *dur);
-        }
 
         // Tick boundary: promote each portal's write to be next tick's read.
         for portal in &graph.portals {
