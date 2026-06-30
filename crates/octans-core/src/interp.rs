@@ -24,6 +24,9 @@ pub(crate) type Store = HashMap<(usize, &'static str), Value>;
 
 type Injected = HashMap<(usize, &'static str), Value>;
 
+/// The `(port, value)` outputs a single node produced.
+type NodeOutputs = Vec<(&'static str, Value)>;
+
 /// Evaluate one node: gather its inputs (injected boundary feeds, then connected edges, then
 /// unconnected ports' defaults), run it, and return its outputs. Reads `store` immutably, so it
 /// is safe to call concurrently for independent nodes in a level.
@@ -35,7 +38,7 @@ fn eval_node(
     ctx: &Context,
     local: &mut dyn Any,
     injected: &Injected,
-) -> Vec<(&'static str, Value)> {
+) -> NodeOutputs {
     let mut inmap: HashMap<&'static str, Value> = HashMap::new();
     for e in edges {
         if e.to_node == nid {
@@ -103,7 +106,7 @@ fn run_levels(
     for level in 0..=max_level {
         // All nodes at this level are mutually independent: run them concurrently, each with a
         // disjoint `&mut` to its own state, reading the frozen `store` by shared reference.
-        let produced: Vec<(usize, Vec<(&'static str, Value)>, Duration)> = locals
+        let produced: Vec<(usize, NodeOutputs, Duration)> = locals
             .par_iter_mut()
             .enumerate()
             .filter(|(i, _)| level_of[*i] == level)
