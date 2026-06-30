@@ -245,6 +245,18 @@ impl OctansApp {
             ui.label(format!("tick {}", self.tick_count));
             if let Some(t) = &self.last_tick {
                 ui.label(format!("· {:.2} ms", t.latency.as_secs_f64() * 1e3));
+                if !t.faulted.is_empty() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(240, 90, 90),
+                        format!("⚠ {} faulted", t.faulted.len()),
+                    );
+                }
+                if !t.skipped.is_empty() {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(200, 200, 120),
+                        format!("⤳ {} skipped", t.skipped.len()),
+                    );
+                }
             }
             ui.separator();
 
@@ -252,8 +264,9 @@ impl OctansApp {
             egui::ComboBox::from_label("scene")
                 .selected_text(kind.label())
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut kind, SceneKind::Tracker, "tracker");
-                    ui.selectable_value(&mut kind, SceneKind::Diagnostics, "diagnostics");
+                    for k in SceneKind::ALL {
+                        ui.selectable_value(&mut kind, k, k.label());
+                    }
                 });
             if kind != self.scene_kind {
                 self.set_scene(kind);
@@ -289,9 +302,12 @@ impl eframe::App for OctansApp {
             .show(ctx, |ui| self.profiler_ui(ui));
         egui::CentralPanel::default().show(ctx, |ui| self.canvas_ui(ui));
 
-        // Keep animating while playing (egui is reactive and would otherwise idle).
+        // While playing, schedule the next repaint at the tick rate — *not* every monitor frame —
+        // so we don't spin the CPU. When stopped/stepping we request nothing and egui idles
+        // (reactive: it only repaints on input).
         if self.run == RunState::Playing {
-            ctx.request_repaint();
+            let period = (1.0 / self.tick_hz).clamp(1.0 / 240.0, 1.0);
+            ctx.request_repaint_after(Duration::from_secs_f32(period));
         }
     }
 }

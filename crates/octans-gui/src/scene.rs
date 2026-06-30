@@ -1,27 +1,40 @@
 //! Example scenes, built in code (there's no editor yet). Each returns a compiled `(Graph, Mira)`
 //! ready to tick — mirroring `octans-nodes/examples/{tracker,diagnostics}.rs`.
 
-use octans_core::{group, register_primitives, Gather, Graph, Mira, Registry};
+use octans_core::{
+    group, register_primitives, Context, Gather, Graph, Inputs, Mira, Node, Outputs, PortSpec,
+    RegisteredType, Registry,
+};
 use octans_nodes::*;
+use std::any::Any;
 
 /// Which built-in scene to show.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SceneKind {
     Tracker,
     Diagnostics,
+    Robustness,
 }
 
 impl SceneKind {
+    pub const ALL: [SceneKind; 3] = [
+        SceneKind::Tracker,
+        SceneKind::Diagnostics,
+        SceneKind::Robustness,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             SceneKind::Tracker => "tracker",
             SceneKind::Diagnostics => "diagnostics",
+            SceneKind::Robustness => "robustness",
         }
     }
     pub fn build(self) -> (Graph, Mira) {
         match self {
             SceneKind::Tracker => tracker(),
             SceneKind::Diagnostics => diagnostics(),
+            SceneKind::Robustness => robustness(),
         }
     }
 }
@@ -101,12 +114,109 @@ pub fn diagnostics() -> (Graph, Mira) {
     (g, engine)
 }
 
+/// A robustness showcase: a node that always panics (→ fault, isolated), nodes skipped by the
+/// resulting missing input (fault cascade), an intermittent source whose consumers skip on even
+/// ticks (skip cascade), and a healthy chain for contrast. Drives the fault/skip visualization.
+pub fn robustness() -> (Graph, Mira) {
+    let mut reg = Registry::new();
+    register_primitives(&mut reg);
+    let mut g = Graph::new(reg);
+
+    // healthy chain (stays green)
+    let c = g.add(Const42);
+    let e1 = g.add(EchoI32);
+    g.connect(c, "out", e1, "in").unwrap();
+
+    // a faulting node and its downstream (skipped because the bomb produced nothing)
+    let bomb = g.add(Bomb);
+    let e2 = g.add(EchoI32);
+    g.connect(bomb, "out", e2, "in").unwrap();
+
+    // intermittent source → two-stage skip cascade on even ticks
+    let odd = g.add(OddOnly);
+    let e3 = g.add(EchoI32);
+    let e4 = g.add(EchoI32);
+    g.connect(odd, "out", e3, "in").unwrap();
+    g.connect(e3, "out", e4, "in").unwrap();
+
+    let engine = Mira::compile(&g).expect("robustness scene compiles");
+    (g, engine)
+}
+
+// --- tiny demo nodes for the robustness scene ---
+
+struct Const42;
+impl Node for Const42 {
+    fn node_type(&self) -> &'static str {
+        "demo.const42"
+    }
+    fn inputs(&self) -> Vec<PortSpec> {
+        vec![]
+    }
+    fn outputs(&self) -> Vec<PortSpec> {
+        vec![PortSpec::new("out", i32::type_spec())]
+    }
+    fn process(&self, _c: &Context, _l: &mut dyn Any, _i: &Inputs, o: &mut Outputs) {
+        o.set("out", 42i32);
+    }
+}
+
+struct Bomb;
+impl Node for Bomb {
+    fn node_type(&self) -> &'static str {
+        "demo.bomb"
+    }
+    fn inputs(&self) -> Vec<PortSpec> {
+        vec![]
+    }
+    fn outputs(&self) -> Vec<PortSpec> {
+        vec![PortSpec::new("out", i32::type_spec())]
+    }
+    fn process(&self, _c: &Context, _l: &mut dyn Any, _i: &Inputs, _o: &mut Outputs) {
+        panic!("boom (intentional: demonstrates fault isolation)");
+    }
+}
+
+struct OddOnly;
+impl Node for OddOnly {
+    fn node_type(&self) -> &'static str {
+        "demo.odd_only"
+    }
+    fn inputs(&self) -> Vec<PortSpec> {
+        vec![]
+    }
+    fn outputs(&self) -> Vec<PortSpec> {
+        vec![PortSpec::new("out", i32::type_spec())]
+    }
+    fn process(&self, c: &Context, _l: &mut dyn Any, _i: &Inputs, o: &mut Outputs) {
+        if c.tick() % 2 == 1 {
+            o.set("out", 1i32);
+        }
+    }
+}
+
+struct EchoI32;
+impl Node for EchoI32 {
+    fn node_type(&self) -> &'static str {
+        "demo.echo"
+    }
+    fn inputs(&self) -> Vec<PortSpec> {
+        vec![PortSpec::new("in", i32::type_spec())]
+    }
+    fn outputs(&self) -> Vec<PortSpec> {
+        vec![PortSpec::new("out", i32::type_spec())]
+    }
+    fn process(&self, _c: &Context, _l: &mut dyn Any, i: &Inputs, o: &mut Outputs) {
+        o.set_value("out", i.value("in").clone());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn both_scenes_compile_and_tick_headlessly() {
+    fn graph_scenes_compile_and_tick_headlessly() {
         for kind in [SceneKind::Tracker, SceneKind::Diagnostics] {
             let (graph, mut engine) = kind.build();
             assert!(graph.node_count() > 0);
@@ -115,6 +225,22 @@ mod tests {
                 assert!(tick.ok(), "{} faulted: {:?}", kind.label(), tick.faults);
             }
         }
+    }
+
+    #[test]
+    fn robustness_scene_produces_faults_and_skips() {
+        // Silence the intentional Bomb panic during the test.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let (graph, mut engine) = SceneKind::Robustness.build();
+        let even = engine.run_tick(&graph); // tick 1 is odd; run one to land on tick 2 (even)
+        let _ = even;
+        let t2 = engine.run_tick(&graph);
+        std::panic::set_hook(prev);
+
+        assert_eq!(t2.faults.len(), 1, "the bomb faults");
+        // bomb's consumer + the intermittent cascade skip on the even tick
+        assert!(!t2.skipped.is_empty(), "skips cascade");
     }
 
     #[test]
