@@ -40,6 +40,9 @@ pub struct Fault {
 enum Eval {
     /// Ran to completion; carries the `(port, value)` pairs it wrote.
     Produced(NodeOutputs),
+    /// A required input was absent this tick (upstream produced nothing): the node is skipped
+    /// rather than fed garbage. Its own outputs are absent, so the skip cascades downstream.
+    Skipped,
     /// `process` panicked; carries the panic message. The engine keeps running.
     Faulted(String),
 }
@@ -83,10 +86,17 @@ fn eval_node(
             inmap.entry(p).or_insert_with(|| v.clone());
         }
     }
-    for spec in nodes[nid].inputs() {
+    let specs = nodes[nid].inputs();
+    for spec in specs {
         if !inmap.contains_key(spec.name) {
-            if let Some(d) = spec.default {
-                inmap.insert(spec.name, d);
+            match spec.default {
+                Some(d) => {
+                    inmap.insert(spec.name, d);
+                }
+                // A required input is absent (upstream skipped/faulted, or produced nothing):
+                // skip this node rather than panic on a missing input or feed it garbage.
+                None if !spec.optional => return Eval::Skipped,
+                None => {}
             }
         }
     }
@@ -122,8 +132,8 @@ pub(crate) fn run_order(
         let t0 = Instant::now();
         let ev = eval_node(nid, nodes, edges, &store, ctx, local, injected);
         timings.push((nid, t0.elapsed()));
-        // Inside a Map lane, a faulting body node degrades gracefully: it simply produces no
-        // outputs (the top-level tick is what surfaces faults to the caller).
+        // Inside a Map lane, a skipped or faulting body node degrades gracefully: it simply
+        // produces no outputs (the top-level tick is what surfaces faults/skips to the caller).
         if let Eval::Produced(outs) = ev {
             for (port, val) in outs {
                 store.insert((nid, port), val);
@@ -142,9 +152,10 @@ fn run_levels(
     locals: &mut [Box<dyn Any + Send>],
     ctx: &Context,
     profile: &mut Profile,
-) -> (Store, Vec<Fault>) {
+) -> (Store, Vec<Fault>, Vec<NodeId>) {
     let mut store: Store = HashMap::new();
     let mut faults: Vec<Fault> = Vec::new();
+    let mut skipped: Vec<NodeId> = Vec::new();
     let empty: Injected = HashMap::new();
 
     for level in 0..=max_level {
@@ -169,6 +180,7 @@ fn run_levels(
                         store.insert((nid, port), val);
                     }
                 }
+                Eval::Skipped => skipped.push(NodeId(nid)),
                 Eval::Faulted(message) => faults.push(Fault {
                     node: NodeId(nid),
                     message,
@@ -177,7 +189,7 @@ fn run_levels(
             profile.record(nid, dur);
         }
     }
-    (store, faults)
+    (store, faults, skipped)
 }
 
 /// Topologically sort `num_nodes` by `deps` (`(from, to)` pairs), Kahn. Reused for the top
@@ -286,7 +298,7 @@ impl Mira {
         } = self;
         ctx.advance();
 
-        let (store, faults) = run_levels(
+        let (store, faults, skipped) = run_levels(
             &graph.nodes,
             &graph.edges,
             level_of,
@@ -305,6 +317,7 @@ impl Mira {
             latency: start.elapsed(),
             store,
             faults,
+            skipped,
         }
     }
 }
@@ -409,13 +422,15 @@ impl Mira {
     }
 }
 
-/// The result of one tick: latency, the values each node produced (for inspection/sinks), and
-/// any faults — nodes whose `process` panicked. A non-empty `faults` means the tick still
-/// completed (the engine isolated those nodes); inspect it instead of relying on a clean run.
+/// The result of one tick: latency, the values each node produced (for inspection/sinks), any
+/// faults (nodes whose `process` panicked), and any skips (nodes whose required input was absent
+/// this tick). A non-empty `faults`/`skipped` means the tick still completed — the engine
+/// isolated those nodes; inspect these instead of relying on a clean run.
 pub struct Tick {
     pub latency: Duration,
     store: Store,
     pub faults: Vec<Fault>,
+    pub skipped: Vec<NodeId>,
 }
 
 impl Tick {

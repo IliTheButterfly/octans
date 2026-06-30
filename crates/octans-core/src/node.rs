@@ -19,9 +19,14 @@ use std::collections::HashMap;
 pub struct PortSpec {
     pub name: &'static str,
     pub ty: TypeSpec,
-    /// For input ports: the value used when nothing is connected — i.e. a *parameter*. A future
-    /// QoS/temporal contract (keep-last(N), required/optional) will live alongside this.
+    /// For input ports: the value used when nothing is connected — i.e. a *parameter*.
     pub default: Option<Value>,
+    /// For input ports: if `true`, the node still runs when this input is absent at runtime
+    /// (the upstream produced nothing this tick). If `false` (the default) and the port has no
+    /// `default`, an absent value **skips** the node for that tick rather than feeding it
+    /// garbage — see `Tick::skipped`. Compile-time validation also requires every non-optional,
+    /// defaultless input to be connected.
+    pub optional: bool,
 }
 
 impl PortSpec {
@@ -30,6 +35,7 @@ impl PortSpec {
             name,
             ty,
             default: None,
+            optional: false,
         }
     }
 
@@ -39,7 +45,14 @@ impl PortSpec {
             name,
             ty,
             default: Some(default),
+            optional: false,
         }
+    }
+
+    /// Mark this input optional: the node runs even when the input is absent at runtime.
+    pub fn optional(mut self) -> Self {
+        self.optional = true;
+        self
     }
 }
 

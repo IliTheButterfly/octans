@@ -49,6 +49,23 @@ fn elem_of(ty: &Type) -> Type {
     }
 }
 
+/// If `ty` is `Option<Inner>`, return `Inner`. Used for the missing-data authoring sugar: a
+/// `process` returning `Option<T>` writes its output port only when it yields `Some`, so a node
+/// can legitimately produce nothing this tick (e.g. a detector that sees no target).
+fn option_inner(ty: &Type) -> Option<Type> {
+    let Type::Path(tp) = ty else { return None };
+    let seg = tp.path.segments.last()?;
+    if seg.ident != "Option" {
+        return None;
+    }
+    if let syn::PathArguments::AngleBracketed(ab) = &seg.arguments {
+        if let Some(syn::GenericArgument::Type(inner)) = ab.args.first() {
+            return Some(inner.clone());
+        }
+    }
+    None
+}
+
 #[proc_macro_attribute]
 pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     // ---- attribute args: id = "...", out = "...", and the bare flag `serde` ----
@@ -180,9 +197,15 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         params.push(Param { name, kind });
     }
 
-    let out_ty: Option<Type> = match &sig.output {
-        ReturnType::Default => None,
-        ReturnType::Type(_, t) => Some((**t).clone()),
+    // The return type drives the single output port. `Option<T>` declares a port of element type
+    // `T` that is written only when `process` returns `Some` (missing-data sugar); a bare `T`
+    // always writes; `()` declares no output port.
+    let (out_elem, out_is_option): (Option<Type>, bool) = match &sig.output {
+        ReturnType::Default => (None, false),
+        ReturnType::Type(_, t) => match option_inner(t) {
+            Some(inner) => (Some(inner), true),
+            None => (Some((**t).clone()), false),
+        },
     };
 
     // ---- generate fragments ----
@@ -205,7 +228,7 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => None,
     });
 
-    let outputs_method = match &out_ty {
+    let outputs_method = match &out_elem {
         Some(t) => quote! {
             vec![ ::octans_core::PortSpec::new(#out_name, <#t as ::octans_core::RegisteredType>::type_spec()) ]
         },
@@ -240,9 +263,15 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let call_args = params.iter().map(|p| &p.name);
     let run = quote! { self.__node_run( #( #call_args ),* ) };
-    let body_tail = match &out_ty {
-        Some(_) => quote! { let __ret = #run; _outputs.set(#out_name, __ret); },
-        None => quote! { let () = #run; },
+    let body_tail = match (&out_elem, out_is_option) {
+        // `Option<T>`: write the port only on `Some` — `None` means "no output this tick".
+        (Some(_), true) => quote! {
+            if let ::core::option::Option::Some(__ret) = #run {
+                _outputs.set(#out_name, __ret);
+            }
+        },
+        (Some(_), false) => quote! { let __ret = #run; _outputs.set(#out_name, __ret); },
+        (None, _) => quote! { let () = #run; },
     };
 
     // `serde` flag: serialize the node's fields as its config (requires the struct: Serialize).

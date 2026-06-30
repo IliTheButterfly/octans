@@ -37,6 +37,69 @@ impl Node for Steady {
     }
 }
 
+/// A source that emits only on odd ticks, and nothing on even ticks.
+struct Intermittent;
+impl Node for Intermittent {
+    fn node_type(&self) -> &'static str {
+        "test.intermittent"
+    }
+    fn inputs(&self) -> Vec<PortSpec> {
+        vec![]
+    }
+    fn outputs(&self) -> Vec<PortSpec> {
+        vec![PortSpec::new("out", i32::type_spec())]
+    }
+    fn process(&self, c: &Context, _l: &mut dyn Any, _i: &Inputs, o: &mut Outputs) {
+        if c.tick() % 2 == 1 {
+            o.set("out", 1i32);
+        }
+    }
+}
+
+/// Consumes a required input and echoes it.
+struct Echo;
+impl Node for Echo {
+    fn node_type(&self) -> &'static str {
+        "test.echo"
+    }
+    fn inputs(&self) -> Vec<PortSpec> {
+        vec![PortSpec::new("in", i32::type_spec())]
+    }
+    fn outputs(&self) -> Vec<PortSpec> {
+        vec![PortSpec::new("out", i32::type_spec())]
+    }
+    fn process(&self, _c: &Context, _l: &mut dyn Any, i: &Inputs, o: &mut Outputs) {
+        o.set("out", *i.get::<i32>("in"));
+    }
+}
+
+#[test]
+fn a_missing_required_input_skips_the_node_and_cascades() {
+    let mut reg = Registry::new();
+    register_primitives(&mut reg);
+    let mut g = Graph::new(reg);
+    let src = g.add(Intermittent);
+    let echo = g.add(Echo);
+    g.connect(src, "out", echo, "in").unwrap();
+
+    let mut engine = Mira::compile(&g).unwrap();
+
+    // Tick 1 (odd): source emits, echo runs.
+    let t1 = engine.run_tick(&g);
+    assert!(t1.skipped.is_empty());
+    assert_eq!(
+        t1.output(echo, "out").unwrap().downcast_ref::<i32>(),
+        Some(&1)
+    );
+
+    // Tick 2 (even): source emits nothing -> echo's required input is absent -> echo is skipped,
+    // not fed garbage and not panicking. No output, recorded in `skipped`.
+    let t2 = engine.run_tick(&g);
+    assert_eq!(t2.skipped, vec![echo]);
+    assert!(t2.output(echo, "out").is_none());
+    assert!(t2.ok()); // a skip is not a fault
+}
+
 #[test]
 fn a_panicking_node_is_isolated_and_the_tick_still_completes() {
     // Silence the default panic hook so the (expected) panic doesn't spam test output.
