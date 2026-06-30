@@ -13,6 +13,7 @@
 //! - **Compile-once / run-many** — [`Mira`] (the interpreter engine) builds a topological
 //!   order, then runs ticks and times them.
 
+pub(crate) mod body;
 pub mod context;
 pub mod gather;
 pub mod graph;
@@ -24,6 +25,7 @@ pub mod portal;
 pub mod prims;
 pub mod profile;
 pub mod registry;
+pub mod strategy;
 pub mod value;
 
 pub use context::Context;
@@ -37,4 +39,5 @@ pub use portal::{Portal, PortalRead, PortalWrite};
 pub use prims::register_primitives;
 pub use profile::{NodeStat, Profile};
 pub use registry::{Registry, TypeDescriptor};
+pub use strategy::{Strategy, StrategyBuilder, StrategyHandle};
 pub use value::{RegisteredType, Shape, TypeId, TypeSpec, Value};
