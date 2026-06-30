@@ -68,6 +68,11 @@ impl NodeRegistry {
             Box::new(serde_json::from_value::<T>(cfg.clone()).expect("node config deserializes"))
         });
     }
+
+    /// Build a node from its type id + config, if a factory is registered.
+    pub fn build(&self, type_id: &str, config: &serde_json::Value) -> Option<Box<dyn Node>> {
+        self.factories.get(type_id).map(|f| f(config))
+    }
 }
 
 #[derive(Debug)]
@@ -107,11 +112,10 @@ impl GraphSpec {
     pub fn build(&self, registry: Registry, factories: &NodeRegistry) -> Result<Graph, BuildError> {
         let mut g = Graph::new(registry);
         for ns in &self.nodes {
-            let factory = factories
-                .factories
-                .get(&ns.type_id)
+            let node = factories
+                .build(&ns.type_id, &ns.config)
                 .ok_or_else(|| BuildError::UnknownNodeType(ns.type_id.clone()))?;
-            g.add_boxed(factory(&ns.config));
+            g.add_boxed(node);
         }
         for es in &self.edges {
             g.connect(

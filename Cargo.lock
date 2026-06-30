@@ -152,6 +152,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "octans-codegen"
+version = "0.0.0"
+dependencies = [
+ "octans-core",
+ "octans-nodes",
+ "serde_json",
+ "syn",
+]
+
+[[package]]
 name = "octans-core"
 version = "0.0.0"
 dependencies = [
