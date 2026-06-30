@@ -9,3 +9,4 @@ description = "Octans standard nodes (dogfooding the #[node] macro)."
 [dependencies]
 octans-core = { path = "../octans-core" }
 octans-macros = { path = "../octans-macros" }
+nalgebra = "0.33" # linear algebra for triangulation (SVD)
