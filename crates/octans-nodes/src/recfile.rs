@@ -16,6 +16,11 @@
 //!
 //! (De)serialization is driven by the type registry's `Serializer`/`Deserializer` entries, so any
 //! registered, serde-able type flows through unchanged.
+//!
+//! Fidelity: integer/byte channels (e.g. `Image`) round-trip bit-exactly. Floating-point channels
+//! are preserved to full f64 precision but, because the format is JSON *text*, may differ by up to
+//! one ULP on replay for some values — replay is numerically faithful, not always bit-identical.
+//! A binary format (bit-exact floats) can be added later behind the same node API.
 
 use octans_core::{
     Context, Deserializer, Inputs, LogLevel, Node, Outputs, PortSpec, RegisteredType, Registry,
@@ -201,6 +206,26 @@ impl Replayer {
             frames: OnceLock::new(),
         })
     }
+
+    /// Build a replayer with an **author-declared** schema instead of reading it from the file
+    /// header. Use this when you want to assert the types a file loads, or to reference a file
+    /// that doesn't exist yet at graph-build time (the frames are read at compile, by which point
+    /// it must exist). Frame reading tolerates files with or without a header line.
+    pub fn with_schema(path: impl Into<PathBuf>, schema: &[(&str, TypeId)]) -> Self {
+        Self {
+            path: path.into(),
+            schema: schema.iter().map(|(n, id)| (leak(n), *id)).collect(),
+            frames: OnceLock::new(),
+        }
+    }
+}
+
+/// True if a line is an octans record header (vs a data frame).
+fn is_header_line(line: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|v| v.get(FORMAT_TAG).cloned())
+        .is_some()
 }
 
 impl Node for Replayer {
@@ -227,8 +252,17 @@ impl Node for Replayer {
 
         let mut frames: Vec<Frame> = Vec::new();
         if let Ok(file) = File::open(&self.path) {
-            for line in BufReader::new(file).lines().skip(1).map_while(Result::ok) {
+            for (i, line) in BufReader::new(file)
+                .lines()
+                .map_while(Result::ok)
+                .enumerate()
+            {
                 if line.trim().is_empty() {
+                    continue;
+                }
+                // Skip the header line if present (the first line), so both `open` and
+                // `with_schema` read headered files correctly.
+                if i == 0 && is_header_line(&line) {
                     continue;
                 }
                 let mut frame = Frame::new();
