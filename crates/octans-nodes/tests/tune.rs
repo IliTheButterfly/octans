@@ -37,6 +37,60 @@ impl Slow {
     }
 }
 
+struct Wrong;
+#[node(id = "test.wrong", out = "out")]
+impl Wrong {
+    fn process(&self, x: &u32) -> u32 {
+        *x + 2 // NOT equivalent to the reference (x + 1)
+    }
+}
+
+#[test]
+fn autotuner_rejects_a_fast_but_wrong_variant() {
+    // variant 0 = correct but slow (the reference); variant 1 = wrong but fast.
+    let strat = Strategy::builder()
+        .node("correct_slow", Slow)
+        .node("wrong_fast", Wrong)
+        .build();
+    let handle = strat.handle();
+
+    let mut reg = Registry::new();
+    register_primitives(&mut reg);
+    let mut g = Graph::new(reg);
+    let c = g.add(Const { v: 5 });
+    let s = g.add(strat);
+    g.connect(c, "out", s, "x").unwrap();
+
+    let mut engine = Mira::compile(&g).unwrap();
+    let results = engine.tune(
+        &g,
+        &[(s, handle.clone())],
+        TuneConfig {
+            warmup: 1,
+            trials: 3,
+        },
+    );
+
+    assert_eq!(
+        results[0].rejected,
+        vec![1],
+        "the wrong-output variant is rejected"
+    );
+    assert_eq!(
+        results[0].chosen_name, "correct_slow",
+        "verify keeps the correct variant even though it is slower"
+    );
+    assert_eq!(handle.selected(), 0);
+    // and the chosen variant gives the correct result
+    let out = *engine
+        .run_tick(&g)
+        .output(s, "out")
+        .unwrap()
+        .downcast_ref::<u32>()
+        .unwrap();
+    assert_eq!(out, 6);
+}
+
 #[test]
 fn autotuner_picks_the_fastest_equivalent_variant() {
     // "slow" is variant 0 (the default) so a successful tune must switch away from it.

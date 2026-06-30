@@ -13,7 +13,7 @@ pub const T_IMAGE: TypeId = "octans.std.image";
 
 /// A grayscale `u8` image. Shared cheaply via the enclosing `Value`'s `Arc`; a fresh `px`
 /// buffer is allocated only when a node *computes* a new image (not for transport).
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Image {
     pub w: usize,
     pub h: usize,
@@ -27,10 +27,9 @@ impl RegisteredType for Image {
 /// Register the standard node-library types into a [`Registry`].
 /// (Primitives like `u32` are registered separately via `octans_core::register_primitives`.)
 pub fn register_node_types(reg: &mut Registry) {
-    reg.register_type(TypeDescriptor {
-        id: T_IMAGE,
-        name: "Image (grayscale, u8)",
-    });
+    reg.register_type(
+        TypeDescriptor::new(T_IMAGE, "Image (grayscale, u8)").with_eq(octans_core::eq_via::<Image>),
+    );
 }
 
 /// A source: emits a frame with known bright disks on a dim background. A *known* blob count

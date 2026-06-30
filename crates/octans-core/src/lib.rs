@@ -38,6 +38,6 @@ pub use node::{Inputs, Node, Outputs, PortSpec};
 pub use portal::{Portal, PortalRead, PortalWrite};
 pub use prims::register_primitives;
 pub use profile::{NodeStat, Profile};
-pub use registry::{Registry, TypeDescriptor};
+pub use registry::{eq_via, Comparator, Registry, TypeDescriptor};
 pub use strategy::{Strategy, StrategyBuilder, StrategyHandle};
 pub use value::{RegisteredType, Shape, TypeId, TypeSpec, Value};

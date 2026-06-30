@@ -279,16 +279,19 @@ pub struct TuneResult {
     pub chosen_name: &'static str,
     /// Best (min) observed latency per variant, in declaration order.
     pub per_variant_best: Vec<Duration>,
+    /// Variants excluded because an output disagreed with the reference (variant 0).
+    pub rejected: Vec<usize>,
 }
 
 impl Mira {
     /// Autotune: for each strategy node, benchmark every variant on the live graph (the
-    /// profiler measures the node's latency; we take the min over trials to shrug off noise) and
-    /// select the fastest. Greedy per strategy.
+    /// profiler measures the node's latency; we take the min over trials to shrug off noise),
+    /// **verify** each variant agrees with the reference (variant 0) on every output that has a
+    /// registered comparator, and select the fastest *verified* variant. Greedy per strategy.
     ///
-    /// v1 is **speed-only**: variants are assumed output-equivalent (author-asserted). Verify-by-
-    /// default (differential-test the variants' outputs) is the planned next step — it needs a
-    /// registered per-type comparator.
+    /// Verify-by-default: a variant whose comparable outputs differ from the reference is
+    /// rejected (it isn't actually equivalent). Outputs whose type has no comparator can't be
+    /// checked, so they're trusted (the author asserted equivalence).
     pub fn tune(
         &mut self,
         graph: &Graph,
@@ -298,25 +301,48 @@ impl Mira {
         let mut results = Vec::new();
         for (sid, handle) in strategies {
             let count = handle.variant_count();
+            let out_specs = graph.nodes[sid.0].outputs();
             let mut best = vec![Duration::MAX; count];
+            // Captured outputs per variant (one Option<Value> per output port).
+            let mut sample: Vec<Vec<Option<Value>>> = vec![Vec::new(); count];
+
             for (v, slot) in best.iter_mut().enumerate() {
                 handle.select(v);
                 for _ in 0..cfg.warmup {
                     self.run_tick(graph);
                 }
                 for _ in 0..cfg.trials {
-                    self.run_tick(graph);
+                    let tick = self.run_tick(graph);
                     let t = self.profile().node(*sid).last;
                     if t < *slot {
                         *slot = t;
                     }
+                    sample[v] = out_specs
+                        .iter()
+                        .map(|p| tick.output(*sid, p.name).cloned())
+                        .collect();
                 }
             }
-            let chosen = best
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, d)| **d)
-                .map(|(v, _)| v)
+
+            // Verify each variant against the reference (variant 0).
+            let mut rejected: Vec<usize> = Vec::new();
+            if count > 1 && !sample[0].is_empty() {
+                for (v, sv) in sample.iter().enumerate().skip(1) {
+                    let differs = out_specs.iter().enumerate().any(|(k, p)| {
+                        match (graph.registry.comparator(p.ty.id), &sample[0][k], &sv[k]) {
+                            (Some(cmp), Some(a), Some(b)) => !cmp(a, b),
+                            _ => false,
+                        }
+                    });
+                    if differs {
+                        rejected.push(v);
+                    }
+                }
+            }
+
+            let chosen = (0..count)
+                .filter(|v| !rejected.contains(v))
+                .min_by_key(|&v| best[v])
                 .unwrap_or(0);
             handle.select(chosen);
             results.push(TuneResult {
@@ -324,6 +350,7 @@ impl Mira {
                 chosen,
                 chosen_name: handle.variant_name(chosen),
                 per_variant_best: best,
+                rejected,
             });
         }
         results

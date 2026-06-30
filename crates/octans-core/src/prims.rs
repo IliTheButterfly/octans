@@ -14,10 +14,13 @@ macro_rules! prim {
             }
         )+
 
-        /// Register the built-in scalar types into a [`Registry`].
+        /// Register the built-in scalar types into a [`Registry`] (with `==` comparators).
         pub fn register_primitives(reg: &mut Registry) {
             $(
-                reg.register_type(TypeDescriptor { id: <$t as RegisteredType>::ID, name: stringify!($t) });
+                reg.register_type(
+                    TypeDescriptor::new(<$t as RegisteredType>::ID, stringify!($t))
+                        .with_eq(crate::registry::eq_via::<$t>),
+                );
             )+
         }
     };
