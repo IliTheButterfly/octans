@@ -4,7 +4,7 @@
 //! the offending nodes/ports — the perennial gap in every previous attempt
 //! (`IncompatibleTypes` was defined but never enforced). Here it is enforced from day one.
 
-use crate::node::{Node, PortSpec};
+use crate::node::Node;
 use crate::portal::Portal;
 use crate::registry::Registry;
 use crate::value::{TypeSpec, Value};
@@ -72,20 +72,6 @@ impl Graph {
         p
     }
 
-    fn output_spec(&self, n: NodeId, port: &str) -> Option<PortSpec> {
-        self.nodes[n.0]
-            .outputs()
-            .into_iter()
-            .find(|p| p.name == port)
-    }
-
-    fn input_spec(&self, n: NodeId, port: &str) -> Option<PortSpec> {
-        self.nodes[n.0]
-            .inputs()
-            .into_iter()
-            .find(|p| p.name == port)
-    }
-
     pub fn connect(
         &mut self,
         from: NodeId,
@@ -93,40 +79,58 @@ impl Graph {
         to: NodeId,
         to_port: &'static str,
     ) -> Result<(), ConnectError> {
-        let out = self
-            .output_spec(from, from_port)
-            .ok_or(ConnectError::NoSuchOutput {
-                node: from,
-                port: from_port.to_string(),
-            })?;
-        let inp = self
-            .input_spec(to, to_port)
-            .ok_or(ConnectError::NoSuchInput {
-                node: to,
-                port: to_port.to_string(),
-            })?;
-
-        if !self.registry.is_registered(out.ty.id) {
-            return Err(ConnectError::UnregisteredType { id: out.ty.id });
-        }
-        if !self.registry.is_registered(inp.ty.id) {
-            return Err(ConnectError::UnregisteredType { id: inp.ty.id });
-        }
-        if !out.ty.compatible_with(&inp.ty) {
-            return Err(ConnectError::TypeMismatch {
-                from_node: from,
-                from: out.ty,
-                to_node: to,
-                to: inp.ty,
-            });
-        }
-
-        self.edges.push(Edge {
-            from_node: from.0,
-            from_port,
-            to_node: to.0,
-            to_port,
-        });
+        let edge = make_edge(&self.registry, &self.nodes, from, from_port, to, to_port)?;
+        self.edges.push(edge);
         Ok(())
     }
+}
+
+/// Validate a connection against the registry + node port specs, returning the edge (or a
+/// diagnostic). Shared by `Graph::connect` and group flattening so the rules live in one place.
+pub(crate) fn make_edge(
+    registry: &Registry,
+    nodes: &[Box<dyn Node>],
+    from: NodeId,
+    from_port: &'static str,
+    to: NodeId,
+    to_port: &'static str,
+) -> Result<Edge, ConnectError> {
+    let out = nodes[from.0]
+        .outputs()
+        .into_iter()
+        .find(|p| p.name == from_port)
+        .ok_or(ConnectError::NoSuchOutput {
+            node: from,
+            port: from_port.to_string(),
+        })?;
+    let inp = nodes[to.0]
+        .inputs()
+        .into_iter()
+        .find(|p| p.name == to_port)
+        .ok_or(ConnectError::NoSuchInput {
+            node: to,
+            port: to_port.to_string(),
+        })?;
+
+    if !registry.is_registered(out.ty.id) {
+        return Err(ConnectError::UnregisteredType { id: out.ty.id });
+    }
+    if !registry.is_registered(inp.ty.id) {
+        return Err(ConnectError::UnregisteredType { id: inp.ty.id });
+    }
+    if !out.ty.compatible_with(&inp.ty) {
+        return Err(ConnectError::TypeMismatch {
+            from_node: from,
+            from: out.ty,
+            to_node: to,
+            to: inp.ty,
+        });
+    }
+
+    Ok(Edge {
+        from_node: from.0,
+        from_port,
+        to_node: to.0,
+        to_port,
+    })
 }

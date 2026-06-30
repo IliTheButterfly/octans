@@ -15,6 +15,7 @@
 
 pub mod context;
 pub mod graph;
+pub mod group;
 pub mod interp;
 pub mod map;
 pub mod node;
@@ -25,6 +26,7 @@ pub mod value;
 
 pub use context::Context;
 pub use graph::{ConnectError, Graph, NodeId};
+pub use group::{group, GroupBuilder, GroupInstance, GroupTemplate};
 pub use interp::{CompileError, Mira, Tick};
 pub use map::Map;
 pub use node::{Inputs, Node, Outputs, PortSpec};
