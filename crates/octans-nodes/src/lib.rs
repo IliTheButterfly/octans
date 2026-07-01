@@ -89,6 +89,11 @@ pub fn register_std_factories(reg: &mut NodeRegistry) {
     reg.register_serde::<SyntheticCamera>("octans.std.synthetic_camera");
     reg.register_serde::<Threshold>("octans.std.threshold");
     reg.register_serde::<BlobCount>("octans.std.blob_count");
+    reg.register_serde::<AutoThreshold>("octans.std.auto_threshold");
+    reg.register_serde::<MovingPoint>("octans.track.moving_point");
+    reg.register_serde::<CameraSim>("octans.track.camera_sim");
+    reg.register_serde::<Centroid>("octans.track.centroid");
+    reg.register_serde::<ThresholdCentroid>("octans.track.threshold_centroid");
 }
 
 /// Register the standard node types into a [`Catalog`] (for a GUI palette). Each entry is derived
@@ -263,6 +268,7 @@ impl Default for AutoThresholdState {
 /// owned, replicated per lane. It observes the downstream blob count through a single portal
 /// (last tick) and drives `Threshold.thr` this tick. Wire: `BlobCount.count ─portal→ count`,
 /// and `thr → Threshold.thr`.
+#[derive(Serialize, Deserialize)]
 pub struct AutoThreshold {
     pub target: u32,
     pub gain: i32,
@@ -270,7 +276,7 @@ pub struct AutoThreshold {
     pub max: u8,
 }
 
-#[node(id = "octans.std.auto_threshold", out = "thr")]
+#[node(id = "octans.std.auto_threshold", out = "thr", serde)]
 impl AutoThreshold {
     fn process(&self, #[local] s: &mut AutoThresholdState, count: &u32) -> u8 {
         let err = *count as i32 - self.target as i32; // >0: too many blobs -> raise threshold

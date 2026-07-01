@@ -118,21 +118,28 @@ impl OctansApp {
         let Some(sel) = self.selected else {
             return;
         };
-        // Read the node's identity/ports, then drop the borrow so the window closure can take
-        // `&mut self` (texture cache, etc.).
-        let (title, outs) = {
+        // Read the node's identity/ports/config, then drop the borrow so the window closure can
+        // take `&mut self` (texture cache, param edits, etc.).
+        let (title, type_id, cfg, outs) = {
             let Some(node) = self.graph.node(sel) else {
                 self.selected = None;
                 return;
             };
             (
                 format!("inspector · {} #{}", short(node.node_type()), sel.0),
+                node.node_type(),
+                node.to_json(),
                 node.outputs(),
             )
         };
+        // (Re)load the editable config when the selection changes.
+        if self.param_edit.as_ref().map(|(n, _)| *n) != Some(sel.0) {
+            self.param_edit = Some((sel.0, cfg));
+        }
 
         let mut open = true;
         let mut delete = false;
+        let mut params_changed = false;
         egui::Window::new(title)
             .open(&mut open)
             .default_width(280.0)
@@ -146,6 +153,20 @@ impl OctansApp {
                     delete = true;
                 }
                 ui.separator();
+
+                // Parameters (editable config), if this node type is serde-able.
+                if let Some((_, val)) = self.param_edit.as_mut() {
+                    let empty =
+                        val.is_null() || val.as_object().map(|o| o.is_empty()).unwrap_or(false);
+                    if empty {
+                        ui.weak("no editable parameters");
+                    } else {
+                        ui.strong("parameters");
+                        params_changed = crate::params::json_editor(ui, val);
+                    }
+                    ui.separator();
+                }
+
                 if outs.is_empty() {
                     ui.weak("this node has no outputs (a sink)");
                     return;
@@ -172,8 +193,21 @@ impl OctansApp {
             });
         if delete {
             self.delete_node(sel);
-        } else if !open {
+            return;
+        }
+        // Apply a parameter edit: rebuild the node from the edited config and swap it in (ports
+        // unchanged, so a light recompile preserves view/layout/selection).
+        if params_changed {
+            if let Some((_, val)) = &self.param_edit {
+                if let Some(node) = self.node_registry.build(type_id, val) {
+                    self.graph.replace_node(sel, node);
+                    self.recompile();
+                }
+            }
+        }
+        if !open {
             self.selected = None;
+            self.param_edit = None;
         }
     }
 }

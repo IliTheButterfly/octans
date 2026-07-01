@@ -34,6 +34,21 @@ fn can_connect_validates_without_mutating_and_disconnect_removes() {
 }
 
 #[test]
+fn config_nodes_rebuild_from_edited_json() {
+    let mut factories = NodeRegistry::new();
+    register_std_factories(&mut factories);
+
+    // A param edit is: take config JSON, tweak it, rebuild the node from it.
+    let cfg = serde_json::json!({"center": [1.0, 2.0, 3.0], "w": 32, "h": 16, "f": 250.0});
+    let node = factories
+        .build("octans.track.camera_sim", &cfg)
+        .expect("camera_sim has a serde factory now");
+    assert_eq!(node.node_type(), "octans.track.camera_sim");
+    // The rebuilt node's config round-trips to what we asked for (int/float flavors preserved).
+    assert_eq!(node.to_json(), cfg);
+}
+
+#[test]
 fn remove_node_tombstones_and_keeps_other_ids_stable() {
     let mut reg = Registry::new();
     register_primitives(&mut reg);

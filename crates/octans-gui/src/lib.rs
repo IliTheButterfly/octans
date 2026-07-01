@@ -10,6 +10,7 @@ pub mod layout;
 pub mod log_panel;
 pub mod model;
 pub mod palette;
+pub mod params;
 pub mod profiler;
 pub mod pyxis;
 pub mod scene;
@@ -17,7 +18,8 @@ pub mod schedule;
 
 use eframe::egui;
 use octans_core::{
-    Catalog, Diagnostic, Fault, Graph, Mira, NodeId, StrategyHandle, Tick, TuneResult, Value,
+    Catalog, Diagnostic, Fault, Graph, Mira, NodeId, NodeRegistry, StrategyHandle, Tick,
+    TuneResult, Value,
 };
 use scene::SceneKind;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -211,6 +213,10 @@ pub struct OctansApp {
     pub(crate) edit_error: Option<String>,
     /// Manual node positions (world top-left), overriding auto-layout where set. Keyed by NodeId.0.
     pub(crate) manual_pos: HashMap<usize, egui::Pos2>,
+    /// Serde factories, for rebuilding a node from edited config (param editing / load).
+    pub(crate) node_registry: NodeRegistry,
+    /// The config being edited in the inspector: `(node, json)`. Reloaded when selection changes.
+    pub(crate) param_edit: Option<(usize, serde_json::Value)>,
 }
 
 impl OctansApp {
@@ -220,6 +226,8 @@ impl OctansApp {
         let layout = layout::layout(&view);
         let mut catalog = Catalog::new();
         octans_nodes::register_std_catalog(&mut catalog);
+        let mut node_registry = NodeRegistry::new();
+        octans_nodes::register_std_factories(&mut node_registry);
         Self {
             graph: scene.graph,
             engine: Some(scene.engine),
@@ -250,6 +258,23 @@ impl OctansApp {
             show_palette: false,
             edit_error: None,
             manual_pos: HashMap::new(),
+            node_registry,
+            param_edit: None,
+        }
+    }
+
+    /// Recompile the engine after a change that doesn't alter the graph's *shape* (e.g. a param
+    /// edit — ports/edges unchanged), preserving view/layout/selection and the tick counter.
+    pub(crate) fn recompile(&mut self) {
+        match Mira::compile(&self.graph) {
+            Ok(m) => {
+                self.engine = Some(m);
+                self.compile_error = None;
+            }
+            Err(e) => {
+                self.engine = None;
+                self.compile_error = Some(format!("{e:?}"));
+            }
         }
     }
 
@@ -316,16 +341,8 @@ impl OctansApp {
     pub(crate) fn rebuild_after_edit(&mut self) {
         self.view = model::ViewGraph::from_graph(&self.graph);
         self.relayout();
-        match Mira::compile(&self.graph) {
-            Ok(m) => {
-                self.engine = Some(m);
-                self.compile_error = None;
-            }
-            Err(e) => {
-                self.engine = None;
-                self.compile_error = Some(format!("{e:?}"));
-            }
-        }
+        self.recompile();
+        self.param_edit = None;
         self.run = RunState::Stopped;
         self.accumulator = 0.0;
         self.tick_count = 0;
@@ -361,6 +378,7 @@ impl OctansApp {
         self.history.clear();
         self.textures.clear();
         self.tune_results.clear();
+        self.param_edit = None;
     }
 
     /// Fold one tick's results into the panels' state.

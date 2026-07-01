@@ -151,12 +151,13 @@ impl Node for Triangulate {
 // ---------------------------------------------------------------------------
 
 /// Ground-truth 3D point that drifts linearly with the tick: `start + vel * tick`.
+#[derive(Serialize, Deserialize)]
 pub struct MovingPoint {
     pub start: [f64; 3],
     pub vel: [f64; 3],
 }
 
-#[node(id = "octans.track.moving_point", out = "point")]
+#[node(id = "octans.track.moving_point", out = "point", serde)]
 impl MovingPoint {
     fn process(&self, #[ctx] ctx: &Context) -> Pt3 {
         let t = ctx.tick() as f64;
@@ -171,6 +172,7 @@ impl MovingPoint {
 /// A pinhole camera at world position `center` (looking +z): renders a bright disk where the
 /// input 3D point projects. Pixel = `(u·f + w/2, v·f + h/2)` with `(u,v)` the normalized coords.
 /// Pair with `Proj::camera(center)` when triangulating.
+#[derive(Serialize, Deserialize)]
 pub struct CameraSim {
     pub center: [f64; 3],
     pub w: usize,
@@ -178,7 +180,7 @@ pub struct CameraSim {
     pub f: f64,
 }
 
-#[node(id = "octans.track.camera_sim", out = "frame")]
+#[node(id = "octans.track.camera_sim", out = "frame", serde)]
 impl CameraSim {
     fn process(&self, point: &Pt3) -> Image {
         let mut px = vec![30u8; self.w * self.h]; // dim background
@@ -212,13 +214,14 @@ impl CameraSim {
 /// observation `(u, v) = ((cx - w/2)/f, (cy - h/2)/f)` — ready to triangulate. Returns `None`
 /// when the mask is empty (the target isn't visible this frame), so the observation is simply
 /// absent rather than a bogus `(0, 0)` that would corrupt triangulation.
+#[derive(Serialize, Deserialize)]
 pub struct Centroid {
     pub w: usize,
     pub h: usize,
     pub f: f64,
 }
 
-#[node(id = "octans.track.centroid", out = "px")]
+#[node(id = "octans.track.centroid", out = "px", serde)]
 impl Centroid {
     fn process(&self, mask: &Image) -> Option<Px> {
         let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0.0f64);
@@ -247,6 +250,7 @@ impl Centroid {
 /// single pass with no intermediate mask allocation. A drop-in, bit-identical, faster variant: an
 /// honest choice for a `Strategy`/autotuner to pick (its boundary `frame → px` matches a
 /// `Threshold→Centroid` group's).
+#[derive(Serialize, Deserialize)]
 pub struct ThresholdCentroid {
     pub w: usize,
     pub h: usize,
@@ -254,7 +258,7 @@ pub struct ThresholdCentroid {
     pub thr: u8,
 }
 
-#[node(id = "octans.track.threshold_centroid", out = "px")]
+#[node(id = "octans.track.threshold_centroid", out = "px", serde)]
 impl ThresholdCentroid {
     fn process(&self, frame: &Image) -> Option<Px> {
         let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0.0f64);

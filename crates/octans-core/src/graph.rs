@@ -134,6 +134,15 @@ impl Graph {
         make_edge(&self.registry, &self.nodes, from, from_port, to, to_port).map(|_| ())
     }
 
+    /// Replace a node in place, keeping its `NodeId` and its edges. Intended for parameter edits
+    /// (which don't change a node's ports). If the new node's ports differ, stale edges may
+    /// reference missing ports — that surfaces as a compile error, not corruption.
+    pub fn replace_node(&mut self, id: NodeId, node: Box<dyn Node>) {
+        if let Some(slot) = self.nodes.get_mut(id.0) {
+            *slot = node;
+        }
+    }
+
     /// Remove a node, replacing it with an inert [`Tombstone`] and dropping every edge that touched
     /// it. Tombstoning keeps all other `NodeId`s valid — deletion must never renumber, since ids
     /// are positional indices that edges and engine state key on. The freed slot is not reused.
