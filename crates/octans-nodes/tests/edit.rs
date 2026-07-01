@@ -34,6 +34,42 @@ fn can_connect_validates_without_mutating_and_disconnect_removes() {
 }
 
 #[test]
+fn serde_node_graph_round_trips_through_graphspec_json() {
+    // The save/load path: a graph of serde-able nodes → GraphSpec → JSON → GraphSpec → Graph.
+    let mut reg = Registry::new();
+    register_primitives(&mut reg);
+    register_node_types(&mut reg);
+    let mut g = Graph::new(reg);
+    let cam = g.add(SyntheticCamera {
+        w: 32,
+        h: 32,
+        blobs: vec![(8, 8, 3)],
+    });
+    let thr = g.add(Threshold);
+    let blob = g.add(BlobCount);
+    g.connect(cam, "frame", thr, "image").unwrap();
+    g.connect(thr, "mask", blob, "mask").unwrap();
+
+    let json = serde_json::to_string(&g.to_spec()).unwrap();
+    let spec: GraphSpec = serde_json::from_str(&json).unwrap();
+
+    let mut factories = NodeRegistry::new();
+    register_std_factories(&mut factories);
+    let mut reg2 = Registry::new();
+    register_primitives(&mut reg2);
+    register_node_types(&mut reg2);
+    let g2 = spec.build(reg2, &factories).expect("rebuild from spec");
+
+    assert_eq!(g2.node_count(), 3);
+    assert!(Mira::compile(&g2).is_ok());
+    // the camera's config (blobs, w, h) survived the round-trip
+    assert_eq!(
+        g2.node(cam).unwrap().to_json(),
+        g.node(cam).unwrap().to_json()
+    );
+}
+
+#[test]
 fn config_nodes_rebuild_from_edited_json() {
     let mut factories = NodeRegistry::new();
     register_std_factories(&mut factories);

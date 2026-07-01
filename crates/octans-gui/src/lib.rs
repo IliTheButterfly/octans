@@ -18,8 +18,8 @@ pub mod schedule;
 
 use eframe::egui;
 use octans_core::{
-    Catalog, Diagnostic, Fault, Graph, Mira, NodeId, NodeRegistry, StrategyHandle, Tick,
-    TuneResult, Value,
+    Catalog, Diagnostic, Fault, Graph, GraphSpec, Mira, NodeId, NodeRegistry, Registry,
+    StrategyHandle, Tick, TuneResult, Value,
 };
 use scene::SceneKind;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -217,6 +217,10 @@ pub struct OctansApp {
     pub(crate) node_registry: NodeRegistry,
     /// The config being edited in the inspector: `(node, json)`. Reloaded when selection changes.
     pub(crate) param_edit: Option<(usize, serde_json::Value)>,
+
+    // save / load
+    pub(crate) graph_path: String,
+    pub(crate) io_status: Option<String>,
 }
 
 impl OctansApp {
@@ -260,6 +264,79 @@ impl OctansApp {
             manual_pos: HashMap::new(),
             node_registry,
             param_edit: None,
+            graph_path: "octans_graph.json".to_string(),
+            io_status: None,
+        }
+    }
+
+    /// Save the graph (as a `GraphSpec`) plus manual node positions to `graph_path`. Node types
+    /// without a serde factory serialize with a null config and won't load back — the load side
+    /// reports that precisely.
+    pub(crate) fn save_graph(&mut self) {
+        let layout: Vec<(usize, f32, f32)> = self
+            .manual_pos
+            .iter()
+            .map(|(i, p)| (*i, p.x, p.y))
+            .collect();
+        let doc = serde_json::json!({ "graph": self.graph.to_spec(), "layout": layout });
+        let res = serde_json::to_string_pretty(&doc)
+            .map_err(|e| e.to_string())
+            .and_then(|s| std::fs::write(&self.graph_path, s).map_err(|e| e.to_string()));
+        self.io_status = Some(match res {
+            Ok(()) => format!("saved → {}", self.graph_path),
+            Err(e) => format!("save failed: {e}"),
+        });
+    }
+
+    /// Load a graph + layout from `graph_path`, rebuilding via the serde factories.
+    pub(crate) fn load_graph(&mut self) {
+        let doc: serde_json::Value = match std::fs::read_to_string(&self.graph_path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+        {
+            Ok(v) => v,
+            Err(e) => {
+                self.io_status = Some(format!("load failed: {e}"));
+                return;
+            }
+        };
+        let spec: GraphSpec =
+            match serde_json::from_value(doc.get("graph").cloned().unwrap_or_default()) {
+                Ok(s) => s,
+                Err(e) => {
+                    self.io_status = Some(format!("bad graph: {e}"));
+                    return;
+                }
+            };
+        let mut reg = Registry::new();
+        octans_core::register_primitives(&mut reg);
+        octans_nodes::register_node_types(&mut reg);
+        octans_nodes::register_tracking_types(&mut reg);
+        match spec.build(reg, &self.node_registry) {
+            Ok(graph) => {
+                self.graph = graph;
+                self.strategies.clear();
+                self.tune_results.clear();
+                self.selected = None;
+                self.manual_pos.clear();
+                if let Some(arr) = doc.get("layout").and_then(|l| l.as_array()) {
+                    for e in arr {
+                        if let Some(a) = e.as_array() {
+                            if let (Some(i), Some(x), Some(y)) = (
+                                a.first().and_then(|v| v.as_u64()),
+                                a.get(1).and_then(|v| v.as_f64()),
+                                a.get(2).and_then(|v| v.as_f64()),
+                            ) {
+                                self.manual_pos
+                                    .insert(i as usize, egui::pos2(x as f32, y as f32));
+                            }
+                        }
+                    }
+                }
+                self.rebuild_after_edit();
+                self.io_status = Some(format!("loaded ← {}", self.graph_path));
+            }
+            Err(e) => self.io_status = Some(format!("load failed: {e:?}")),
         }
     }
 
@@ -410,7 +487,24 @@ impl OctansApp {
     }
 
     fn toolbar_ui(&mut self, ui: &mut egui::Ui) {
+        let mut do_save = false;
+        let mut do_load = false;
         ui.horizontal(|ui| {
+            ui.menu_button("File", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("path");
+                    ui.text_edit_singleline(&mut self.graph_path);
+                });
+                if ui.button("💾 Save").clicked() {
+                    do_save = true;
+                    ui.close_menu();
+                }
+                if ui.button("📂 Load").clicked() {
+                    do_load = true;
+                    ui.close_menu();
+                }
+            });
+            ui.separator();
             if ui
                 .selectable_label(self.run == RunState::Playing, "▶ Play")
                 .clicked()
@@ -470,7 +564,17 @@ impl OctansApp {
                 ui.separator();
                 ui.colored_label(egui::Color32::from_rgb(230, 170, 70), format!("✗ {err}"));
             }
+            if let Some(status) = &self.io_status {
+                ui.separator();
+                ui.weak(status);
+            }
         });
+        if do_save {
+            self.save_graph();
+        }
+        if do_load {
+            self.load_graph();
+        }
     }
 }
 
