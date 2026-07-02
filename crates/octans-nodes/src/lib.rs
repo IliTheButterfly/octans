@@ -14,12 +14,16 @@ use serde::{Deserialize, Serialize};
 
 pub mod diag;
 pub use diag::*;
+pub mod imageops;
+pub use imageops::*;
 pub mod mathx;
 pub use mathx::*;
 pub mod recfile;
 pub use recfile::*;
 pub mod tracking;
 pub use tracking::*;
+pub mod vecx;
+pub use vecx::*;
 
 /// A source that emits a fixed `Vector<T>` for any registered element type (handy for feeding
 /// `Map`/`Triangulate`/etc. from constant data).
@@ -97,6 +101,8 @@ pub fn register_std_factories(reg: &mut NodeRegistry) {
     reg.register_serde::<Centroid>("octans.track.centroid");
     reg.register_serde::<ThresholdCentroid>("octans.track.threshold_centroid");
     register_math_factories(reg);
+    register_vector_factories(reg);
+    register_image_factories(reg);
 }
 
 /// Register the standard node types into a [`Catalog`] (for a GUI palette). Each entry is derived
@@ -147,8 +153,10 @@ pub fn register_std_catalog(cat: &mut Catalog) {
     // core structural / generic (representative type & arity)
     cat.add(|| Gather::new::<f64>(2));
     cat.add(|| Scatter::new::<f64>(2));
-    // math / logic / conversions
+    // math / logic / conversions / vectors / image compositor
     register_math_catalog(cat);
+    register_vector_catalog(cat);
+    register_image_catalog(cat);
 }
 
 /// A source: emits a frame with known bright disks on a dim background. A *known* blob count
