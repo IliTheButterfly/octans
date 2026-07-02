@@ -9,7 +9,7 @@ use octans_core::{
     Catalog, Context, Gather, Inputs, Node, NodeRegistry, Outputs, PortSpec, RegisteredType,
     Registry, Scatter, Shape, TypeDescriptor, TypeId, TypeSpec, Value,
 };
-use octans_macros::node;
+use octans_macros::{node, NodeParams};
 use serde::{Deserialize, Serialize};
 
 pub mod diag;
@@ -148,14 +148,19 @@ pub fn register_std_catalog(cat: &mut Catalog) {
 
 /// A source: emits a frame with known bright disks on a dim background. A *known* blob count
 /// lets the slice assert correctness, not just "it ran".
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, NodeParams)]
 pub struct SyntheticCamera {
+    /// Frame width in pixels.
+    #[param(min = 1, max = 4096)]
     pub w: usize,
+    /// Frame height in pixels.
+    #[param(min = 1, max = 4096)]
     pub h: usize,
-    pub blobs: Vec<(i32, i32, i32)>, // (cx, cy, r)
+    /// Bright disks to render, as `(cx, cy, r)`.
+    pub blobs: Vec<(i32, i32, i32)>,
 }
 
-#[node(id = "octans.std.synthetic_camera", out = "frame", serde)]
+#[node(id = "octans.std.synthetic_camera", out = "frame", serde, params)]
 impl SyntheticCamera {
     fn process(&self) -> Image {
         let mut px = vec![30u8; self.w * self.h]; // dim background
@@ -268,15 +273,21 @@ impl Default for AutoThresholdState {
 /// owned, replicated per lane. It observes the downstream blob count through a single portal
 /// (last tick) and drives `Threshold.thr` this tick. Wire: `BlobCount.count ─portal→ count`,
 /// and `thr → Threshold.thr`.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, NodeParams)]
 pub struct AutoThreshold {
+    /// Desired blob count the controller drives toward.
     pub target: u32,
+    /// Proportional gain (threshold steps per blob of error).
     pub gain: i32,
+    /// Lower clamp for the threshold.
+    #[param(min = 0, max = 255)]
     pub min: u8,
+    /// Upper clamp for the threshold.
+    #[param(min = 0, max = 255)]
     pub max: u8,
 }
 
-#[node(id = "octans.std.auto_threshold", out = "thr", serde)]
+#[node(id = "octans.std.auto_threshold", out = "thr", serde, params)]
 impl AutoThreshold {
     fn process(&self, #[local] s: &mut AutoThresholdState, count: &u32) -> u8 {
         let err = *count as i32 - self.target as i32; // >0: too many blobs -> raise threshold

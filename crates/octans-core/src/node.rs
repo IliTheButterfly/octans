@@ -125,5 +125,12 @@ pub trait Node: Send + Sync {
         serde_json::Value::Null
     }
 
+    /// This node's editable-parameter schema, for property UIs. Default: none (UIs fall back to a
+    /// generic JSON editor over `to_json`). `#[node(params)]` wires this to the schema that
+    /// `#[derive(NodeParams)]` derives from the struct's fields.
+    fn param_schema(&self) -> Option<crate::params::ParamSchema> {
+        None
+    }
+
     fn process(&self, ctx: &Context, local: &mut dyn Any, inputs: &Inputs, outputs: &mut Outputs);
 }

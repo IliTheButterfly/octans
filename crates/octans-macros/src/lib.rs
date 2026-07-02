@@ -27,8 +27,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    parse_macro_input, punctuated::Punctuated, Expr, FnArg, ImplItem, ItemImpl, Lit, Meta,
-    MetaNameValue, Pat, ReturnType, Token, Type,
+    parse_macro_input, punctuated::Punctuated, DeriveInput, Expr, FnArg, ImplItem, ItemImpl, Lit,
+    Meta, MetaNameValue, Pat, ReturnType, Token, Type,
 };
 
 enum Kind {
@@ -73,9 +73,11 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut id: Option<String> = None;
     let mut out_name = String::from("out");
     let mut want_serde = false;
+    let mut want_params = false;
     for meta in args {
         match meta {
             Meta::Path(p) if p.is_ident("serde") => want_serde = true,
+            Meta::Path(p) if p.is_ident("params") => want_params = true,
             Meta::NameValue(nv) => {
                 let key = nv
                     .path
@@ -95,7 +97,7 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
                     other => {
                         return syn::Error::new_spanned(
                             &nv.path,
-                            format!("#[node]: unknown argument `{other}` (expected `id`, `out`, or `serde`)"),
+                            format!("#[node]: unknown argument `{other}` (expected `id`, `out`, `serde`, or `params`)"),
                         )
                         .to_compile_error()
                         .into()
@@ -105,7 +107,7 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
             other => {
                 return syn::Error::new_spanned(
                     other,
-                    "#[node]: expected `id = \"...\"`, `out = \"...\"`, or `serde`",
+                    "#[node]: expected `id = \"...\"`, `out = \"...\"`, `serde`, or `params`",
                 )
                 .to_compile_error()
                 .into()
@@ -285,6 +287,18 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         quote! {}
     };
 
+    // `params` flag: expose the property schema (requires `#[derive(NodeParams)]` on the struct,
+    // which provides `Self::node_params()`).
+    let param_schema_method = if want_params {
+        quote! {
+            fn param_schema(&self) -> ::core::option::Option<::octans_core::ParamSchema> {
+                ::core::option::Option::Some(Self::node_params())
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         #impl_block
 
@@ -300,6 +314,7 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #new_local_body
             }
             #to_json_method
+            #param_schema_method
             fn process(
                 &self,
                 _ctx: &::octans_core::Context,
@@ -313,4 +328,132 @@ pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
     .into()
+}
+
+/// Derive a [`ParamSchema`](octans_core::ParamSchema) from a struct's fields.
+///
+/// Field **types** pick the widget kind (`bool` → checkbox, integers/floats → drag/slider,
+/// `String` → text, `[f64; N]`/`[f32; N]` → per-component drags, anything else → JSON fallback);
+/// field **doc comments** become tooltips; `#[param(min = …, max = …)]` bounds a number (both
+/// bounds → a slider). Emits `pub fn node_params() -> ParamSchema`, which `#[node(params)]`
+/// exposes through the `Node` trait.
+#[proc_macro_derive(NodeParams, attributes(param))]
+pub fn derive_node_params(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+    let syn::Data::Struct(data) = &input.data else {
+        return syn::Error::new_spanned(&input.ident, "NodeParams only supports structs")
+            .to_compile_error()
+            .into();
+    };
+    let name = &input.ident;
+
+    let mut fields = Vec::new();
+    for field in data.fields.iter() {
+        let Some(ident) = &field.ident else { continue };
+        let fname = ident.to_string();
+
+        // Doc comment → tooltip.
+        let mut docs: Vec<String> = Vec::new();
+        for attr in &field.attrs {
+            if attr.path().is_ident("doc") {
+                if let Meta::NameValue(nv) = &attr.meta {
+                    if let Expr::Lit(el) = &nv.value {
+                        if let Lit::Str(s) = &el.lit {
+                            docs.push(s.value().trim().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        let doc = docs.join(" ");
+
+        // #[param(min = …, max = …)] bounds.
+        let mut min: Option<f64> = None;
+        let mut max: Option<f64> = None;
+        for attr in &field.attrs {
+            if attr.path().is_ident("param") {
+                let res = attr.parse_nested_meta(|meta| {
+                    let lit: Lit = meta.value()?.parse()?;
+                    let num = match &lit {
+                        Lit::Int(i) => i.base10_parse::<f64>().ok(),
+                        Lit::Float(f) => f.base10_parse::<f64>().ok(),
+                        _ => None,
+                    };
+                    if meta.path.is_ident("min") {
+                        min = num;
+                    } else if meta.path.is_ident("max") {
+                        max = num;
+                    } else {
+                        return Err(meta.error("expected `min = <number>` or `max = <number>`"));
+                    }
+                    Ok(())
+                });
+                if let Err(e) = res {
+                    return e.to_compile_error().into();
+                }
+            }
+        }
+
+        let kind = param_kind_for(&field.ty, min, max);
+        fields.push(quote! {
+            ::octans_core::ParamField { name: #fname, doc: #doc, kind: #kind }
+        });
+    }
+
+    quote! {
+        impl #name {
+            /// The parameter schema derived from this struct's fields (`#[derive(NodeParams)]`).
+            pub fn node_params() -> ::octans_core::ParamSchema {
+                ::octans_core::ParamSchema { fields: vec![ #( #fields ),* ] }
+            }
+        }
+    }
+    .into()
+}
+
+fn opt_f64(v: Option<f64>) -> proc_macro2::TokenStream {
+    match v {
+        Some(x) => quote! { ::core::option::Option::Some(#x) },
+        None => quote! { ::core::option::Option::None },
+    }
+}
+
+/// Map a field's Rust type to a `ParamKind` (see the derive docs).
+fn param_kind_for(ty: &Type, min: Option<f64>, max: Option<f64>) -> proc_macro2::TokenStream {
+    let mn = opt_f64(min);
+    let mx = opt_f64(max);
+    match ty {
+        Type::Path(tp) => {
+            let seg = tp
+                .path
+                .segments
+                .last()
+                .map(|s| s.ident.to_string())
+                .unwrap_or_default();
+            match seg.as_str() {
+                "bool" => quote! { ::octans_core::ParamKind::Bool },
+                "u8" | "u16" | "u32" | "u64" | "usize" | "i8" | "i16" | "i32" | "i64" | "isize" => {
+                    quote! { ::octans_core::ParamKind::Int { min: #mn, max: #mx } }
+                }
+                "f32" | "f64" => quote! { ::octans_core::ParamKind::Float { min: #mn, max: #mx } },
+                "String" => quote! { ::octans_core::ParamKind::Text },
+                _ => quote! { ::octans_core::ParamKind::Json },
+            }
+        }
+        Type::Array(arr) => {
+            let is_float = matches!(
+                &*arr.elem,
+                Type::Path(p) if p.path.segments.last()
+                    .map(|s| s.ident == "f64" || s.ident == "f32")
+                    .unwrap_or(false)
+            );
+            if is_float {
+                let len = &arr.len;
+                quote! { ::octans_core::ParamKind::FloatArray { len: #len } }
+            } else {
+                quote! { ::octans_core::ParamKind::Json }
+            }
+        }
+        _ => quote! { ::octans_core::ParamKind::Json },
+    }
 }

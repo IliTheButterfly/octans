@@ -120,7 +120,7 @@ impl OctansApp {
         };
         // Read the node's identity/ports/config, then drop the borrow so the window closure can
         // take `&mut self` (texture cache, param edits, etc.).
-        let (title, type_id, cfg, outs) = {
+        let (title, type_id, cfg, outs, schema) = {
             let Some(node) = self.graph.node(sel) else {
                 self.selected = None;
                 return;
@@ -130,6 +130,7 @@ impl OctansApp {
                 node.node_type(),
                 node.to_json(),
                 node.outputs(),
+                node.param_schema(),
             )
         };
         // (Re)load the editable config when the selection changes.
@@ -154,7 +155,9 @@ impl OctansApp {
                 }
                 ui.separator();
 
-                // Parameters (editable config), if this node type is serde-able.
+                // Parameters (editable config): schema-driven widgets when the node has a
+                // `ParamSchema` (docs as tooltips, sliders for ranged fields), generic JSON
+                // editor otherwise.
                 if let Some((_, val)) = self.param_edit.as_mut() {
                     let empty =
                         val.is_null() || val.as_object().map(|o| o.is_empty()).unwrap_or(false);
@@ -162,7 +165,10 @@ impl OctansApp {
                         ui.weak("no editable parameters");
                     } else {
                         ui.strong("parameters");
-                        params_changed = crate::params::json_editor(ui, val);
+                        params_changed = match &schema {
+                            Some(s) => crate::params::schema_editor(ui, s, val),
+                            None => crate::params::json_editor(ui, val),
+                        };
                     }
                     ui.separator();
                 }

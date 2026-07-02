@@ -8,7 +8,7 @@ use octans_core::{
     de_via, eq_via, ser_via, Context, Inputs, Node, Outputs, PortSpec, RegisteredType, Registry,
     Shape, TypeDescriptor, TypeId, TypeSpec, Value,
 };
-use octans_macros::node;
+use octans_macros::{node, NodeParams};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 
@@ -151,13 +151,15 @@ impl Node for Triangulate {
 // ---------------------------------------------------------------------------
 
 /// Ground-truth 3D point that drifts linearly with the tick: `start + vel * tick`.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, NodeParams)]
 pub struct MovingPoint {
+    /// Starting position (world units).
     pub start: [f64; 3],
+    /// Velocity per tick (world units).
     pub vel: [f64; 3],
 }
 
-#[node(id = "octans.track.moving_point", out = "point", serde)]
+#[node(id = "octans.track.moving_point", out = "point", serde, params)]
 impl MovingPoint {
     fn process(&self, #[ctx] ctx: &Context) -> Pt3 {
         let t = ctx.tick() as f64;
@@ -172,15 +174,22 @@ impl MovingPoint {
 /// A pinhole camera at world position `center` (looking +z): renders a bright disk where the
 /// input 3D point projects. Pixel = `(u·f + w/2, v·f + h/2)` with `(u,v)` the normalized coords.
 /// Pair with `Proj::camera(center)` when triangulating.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, NodeParams)]
 pub struct CameraSim {
+    /// Camera world position (looks down +z).
     pub center: [f64; 3],
+    /// Frame width in pixels.
+    #[param(min = 1, max = 4096)]
     pub w: usize,
+    /// Frame height in pixels.
+    #[param(min = 1, max = 4096)]
     pub h: usize,
+    /// Focal length in pixels.
+    #[param(min = 1.0, max = 5000.0)]
     pub f: f64,
 }
 
-#[node(id = "octans.track.camera_sim", out = "frame", serde)]
+#[node(id = "octans.track.camera_sim", out = "frame", serde, params)]
 impl CameraSim {
     fn process(&self, point: &Pt3) -> Image {
         let mut px = vec![30u8; self.w * self.h]; // dim background
@@ -214,14 +223,20 @@ impl CameraSim {
 /// observation `(u, v) = ((cx - w/2)/f, (cy - h/2)/f)` — ready to triangulate. Returns `None`
 /// when the mask is empty (the target isn't visible this frame), so the observation is simply
 /// absent rather than a bogus `(0, 0)` that would corrupt triangulation.
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, NodeParams)]
 pub struct Centroid {
+    /// Mask width in pixels.
+    #[param(min = 1, max = 4096)]
     pub w: usize,
+    /// Mask height in pixels.
+    #[param(min = 1, max = 4096)]
     pub h: usize,
+    /// Focal length in pixels (normalizes the centroid).
+    #[param(min = 1.0, max = 5000.0)]
     pub f: f64,
 }
 
-#[node(id = "octans.track.centroid", out = "px", serde)]
+#[node(id = "octans.track.centroid", out = "px", serde, params)]
 impl Centroid {
     fn process(&self, mask: &Image) -> Option<Px> {
         let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0.0f64);
@@ -250,15 +265,23 @@ impl Centroid {
 /// single pass with no intermediate mask allocation. A drop-in, bit-identical, faster variant: an
 /// honest choice for a `Strategy`/autotuner to pick (its boundary `frame → px` matches a
 /// `Threshold→Centroid` group's).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, NodeParams)]
 pub struct ThresholdCentroid {
+    /// Frame width in pixels.
+    #[param(min = 1, max = 4096)]
     pub w: usize,
+    /// Frame height in pixels.
+    #[param(min = 1, max = 4096)]
     pub h: usize,
+    /// Focal length in pixels (normalizes the centroid).
+    #[param(min = 1.0, max = 5000.0)]
     pub f: f64,
+    /// Brightness threshold.
+    #[param(min = 0, max = 255)]
     pub thr: u8,
 }
 
-#[node(id = "octans.track.threshold_centroid", out = "px", serde)]
+#[node(id = "octans.track.threshold_centroid", out = "px", serde, params)]
 impl ThresholdCentroid {
     fn process(&self, frame: &Image) -> Option<Px> {
         let (mut sx, mut sy, mut n) = (0.0f64, 0.0f64, 0.0f64);
