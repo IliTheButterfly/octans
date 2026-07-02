@@ -210,6 +210,11 @@ pub struct OctansApp {
     // node catalog / palette (editor groundwork)
     pub(crate) catalog: Catalog,
     pub(crate) show_palette: bool,
+    /// Element type + arity chosen in the palette's structural pickers.
+    pub(crate) palette_elem: String,
+    pub(crate) palette_arity: usize,
+    /// Palette search filter.
+    pub(crate) palette_filter: String,
     /// Transient message from the last rejected edit (e.g. a type-mismatched wire).
     pub(crate) edit_error: Option<String>,
     /// Manual node positions (world top-left), overriding auto-layout where set. Keyed by NodeId.0.
@@ -273,6 +278,9 @@ impl OctansApp {
             tune_trials: 5,
             catalog,
             show_palette: false,
+            palette_elem: "octans.f64".to_string(),
+            palette_arity: 3,
+            palette_filter: String::new(),
             edit_error: None,
             manual_pos: HashMap::new(),
             node_registry,

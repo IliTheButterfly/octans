@@ -103,6 +103,34 @@ pub fn register_std_factories(reg: &mut NodeRegistry) {
     register_math_factories(reg);
     register_vector_factories(reg);
     register_image_factories(reg);
+
+    // Structural fan-in/out & routing: config is `{elem, arity}`, built via `new_dyn` (the
+    // element id is leaked to 'static — bounded by the number of distinct registered types).
+    fn elem_arity(cfg: &serde_json::Value) -> (TypeSpec, usize) {
+        let elem: &'static str = Box::leak(
+            cfg.get("elem")
+                .and_then(|v| v.as_str())
+                .unwrap_or("octans.f64")
+                .to_string()
+                .into_boxed_str(),
+        );
+        let arity = cfg.get("arity").and_then(|v| v.as_u64()).unwrap_or(2) as usize;
+        (TypeSpec::scalar(elem), arity.clamp(1, 64))
+    }
+    reg.register("octans.core.gather", |cfg| {
+        let (elem, n) = elem_arity(cfg);
+        Box::new(octans_core::Gather::new_dyn(elem, n))
+    });
+    reg.register("octans.core.scatter", |cfg| {
+        let (elem, n) = elem_arity(cfg);
+        Box::new(octans_core::Scatter::new_dyn(elem, n))
+    });
+    reg.register("octans.core.switch", |cfg| {
+        let (elem, n) = elem_arity(cfg);
+        Box::new(octans_core::Switch::new_dyn(elem, n))
+    });
+    // Zero-config nodes.
+    reg.register("octans.track.triangulate", |_| Box::new(Triangulate));
 }
 
 /// Register the standard node types into a [`Catalog`] (for a GUI palette). Each entry is derived

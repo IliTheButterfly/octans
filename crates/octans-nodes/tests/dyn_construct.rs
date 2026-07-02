@@ -46,3 +46,35 @@ fn registry_enumerates_types_for_a_dropdown() {
     assert!(ids.contains(&"octans.std.image"));
     assert!(ids.len() >= 10);
 }
+
+#[test]
+fn structural_nodes_round_trip_through_graphspec() {
+    // Gather/Scatter/Switch now serialize as {elem, arity} and rebuild via new_dyn factories —
+    // so graphs using them save/load, and the editor can undo/redo them faithfully.
+    let mut factories = NodeRegistry::new();
+    register_std_factories(&mut factories);
+
+    let mut reg = Registry::new();
+    register_primitives(&mut reg);
+    let mut g = Graph::new(reg);
+    let sc = g.add(Scatter::new::<f64>(2));
+    let ga = g.add(Gather::new::<f64>(2));
+    let sw = g.add(Switch::new::<f64>(2));
+    g.connect(sc, "out0", ga, "in0").unwrap();
+    g.connect(sc, "out1", ga, "in1").unwrap();
+    g.connect(sc, "out0", sw, "in0").unwrap();
+    g.connect(sc, "out1", sw, "in1").unwrap();
+
+    let spec: GraphSpec =
+        serde_json::from_str(&serde_json::to_string(&g.to_spec()).unwrap()).unwrap();
+    let mut reg2 = Registry::new();
+    register_primitives(&mut reg2);
+    let rebuilt = spec.build(reg2, &factories).expect("round-trips");
+    assert_eq!(rebuilt.node_count(), 3);
+    assert_eq!(
+        rebuilt.node(ga).unwrap().to_json(),
+        serde_json::json!({"elem": "octans.f64", "arity": 2})
+    );
+    // Ports were reconstructed with the right arity: the edges validate again.
+    assert_eq!(rebuilt.edges().count(), 4);
+}

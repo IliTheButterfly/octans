@@ -205,6 +205,24 @@ impl OctansApp {
         Some(id)
     }
 
+    /// Add a node built from a serde factory with an explicit config (the palette's structural
+    /// pickers — e.g. a Gather with a chosen element type and arity), recording the edit.
+    pub fn add_node_with_config(
+        &mut self,
+        type_id: &str,
+        config: serde_json::Value,
+    ) -> Option<NodeId> {
+        let node = self.node_registry.build(type_id, &config)?;
+        let id = self.graph.add_boxed(node);
+        self.push_edit(EditAction::AddNode {
+            id: id.0,
+            type_id: type_id.to_string(),
+            config,
+        });
+        self.rebuild_after_edit();
+        Some(id)
+    }
+
     /// Disconnect every feeder of an input port, recording the edit (the canvas's right-click).
     pub fn disconnect_edit(&mut self, to: NodeId, to_port: &str) {
         let removed: Vec<(usize, String)> = self

@@ -41,6 +41,9 @@ impl Node for Gather {
     fn node_type(&self) -> &'static str {
         "octans.core.gather"
     }
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({ "elem": self.elem.id, "arity": self.in_names.len() })
+    }
     fn inputs(&self) -> Vec<PortSpec> {
         self.in_names
             .iter()
@@ -95,6 +98,9 @@ impl Scatter {
 impl Node for Scatter {
     fn node_type(&self) -> &'static str {
         "octans.core.scatter"
+    }
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({ "elem": self.elem.id, "arity": self.out_names.len() })
     }
     fn inputs(&self) -> Vec<PortSpec> {
         vec![PortSpec::new(

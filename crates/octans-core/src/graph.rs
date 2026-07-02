@@ -167,6 +167,11 @@ impl Graph {
 
     // --- read-only introspection (for tooling outside the crate, e.g. the GUI) ---
 
+    /// The graph's type registry (read-only) — e.g. for an editor's element-type dropdown.
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
+
     /// Number of node instances in the (flattened) graph.
     pub fn node_count(&self) -> usize {
         self.nodes.len()

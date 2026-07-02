@@ -40,6 +40,9 @@ impl Node for Switch {
     fn node_type(&self) -> &'static str {
         "octans.core.switch"
     }
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({ "elem": self.elem.id, "arity": self.in_names.len() })
+    }
     fn inputs(&self) -> Vec<PortSpec> {
         let mut v = vec![PortSpec::new(
             "select",
