@@ -37,6 +37,26 @@ pub struct GraphSpec {
     pub edges: Vec<EdgeSpec>,
 }
 
+/// One boundary port of a [`BodySpec`]: the group port `name` splices to `(node, port)` inside.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BoundarySpec {
+    pub name: String,
+    pub node: usize,
+    pub port: String,
+}
+
+/// A group body **as data**: child nodes, internal edges, and boundary ports. This is what an
+/// editor authors (and serializes) instead of a Rust closure — lower it to a live
+/// [`GroupTemplate`](crate::GroupTemplate) with
+/// [`GroupTemplate::from_spec`](crate::GroupTemplate::from_spec).
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct BodySpec {
+    pub nodes: Vec<NodeSpec>,
+    pub edges: Vec<EdgeSpec>,
+    pub inputs: Vec<BoundarySpec>,
+    pub outputs: Vec<BoundarySpec>,
+}
+
 type Factory = Box<dyn Fn(&serde_json::Value) -> Box<dyn Node>>;
 
 /// Maps a node-type-id to a factory that builds the node from its config JSON.

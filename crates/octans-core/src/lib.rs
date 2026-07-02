@@ -49,6 +49,6 @@ pub use profile::{NodeStat, Profile};
 pub use registry::{
     de_via, eq_via, ser_via, Comparator, Deserializer, Registry, Serializer, TypeDescriptor,
 };
-pub use serial::{BuildError, EdgeSpec, GraphSpec, NodeRegistry, NodeSpec};
+pub use serial::{BodySpec, BoundarySpec, BuildError, EdgeSpec, GraphSpec, NodeRegistry, NodeSpec};
 pub use strategy::{Strategy, StrategyBuilder, StrategyHandle};
 pub use value::{RegisteredType, Shape, TypeId, TypeSpec, Value};

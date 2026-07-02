@@ -48,6 +48,12 @@ impl GroupBuilder {
         NodeId(self.nodes.len() - 1)
     }
 
+    /// Add an already-boxed node (e.g. one built by a deserialization factory).
+    pub fn add_boxed(&mut self, node: Box<dyn Node>) -> NodeId {
+        self.nodes.push(node);
+        NodeId(self.nodes.len() - 1)
+    }
+
     /// Record an internal connection (validated when the group is inlined).
     pub fn connect(
         &mut self,
@@ -111,6 +117,76 @@ impl GroupTemplate {
         let mut gb = GroupBuilder::default();
         (self.build)(&mut gb);
         gb
+    }
+
+    /// Lower a **data-defined** group body ([`BodySpec`]) into a live template, rebuilding its
+    /// nodes through `factories` on every instantiation (each instance gets fresh state, exactly
+    /// like a closure-built group). This is how editor-authored / deserialized groups exist —
+    /// closures can't be saved, data can.
+    ///
+    /// All node types are validated up front (`BuildError::UnknownNodeType` if a factory is
+    /// missing); edges/boundaries are validated at instantiation like any group. Port and
+    /// boundary names are leaked to `'static` once per template (bounded by the spec's size).
+    pub fn from_spec(
+        name: &str,
+        spec: crate::serial::BodySpec,
+        factories: std::sync::Arc<crate::serial::NodeRegistry>,
+    ) -> Result<GroupTemplate, crate::serial::BuildError> {
+        fn leak(s: &str) -> &'static str {
+            Box::leak(s.to_string().into_boxed_str())
+        }
+
+        // Validate every node type once, so instantiation can't fail on an unknown type.
+        for n in &spec.nodes {
+            if factories.build(&n.type_id, &n.config).is_none() {
+                return Err(crate::serial::BuildError::UnknownNodeType(
+                    n.type_id.clone(),
+                ));
+            }
+        }
+
+        // Pre-leak names so the replay closure is allocation-light and infallible.
+        let nodes: Vec<(String, serde_json::Value)> = spec
+            .nodes
+            .into_iter()
+            .map(|n| (n.type_id, n.config))
+            .collect();
+        let edges: Vec<(usize, &'static str, usize, &'static str)> = spec
+            .edges
+            .iter()
+            .map(|e| (e.from, leak(&e.from_port), e.to, leak(&e.to_port)))
+            .collect();
+        let inputs: Vec<(&'static str, usize, &'static str)> = spec
+            .inputs
+            .iter()
+            .map(|b| (leak(&b.name), b.node, leak(&b.port)))
+            .collect();
+        let outputs: Vec<(&'static str, usize, &'static str)> = spec
+            .outputs
+            .iter()
+            .map(|b| (leak(&b.name), b.node, leak(&b.port)))
+            .collect();
+
+        Ok(GroupTemplate {
+            name: leak(name),
+            build: Box::new(move |gb: &mut GroupBuilder| {
+                for (type_id, config) in &nodes {
+                    let node = factories
+                        .build(type_id, config)
+                        .expect("validated at from_spec time");
+                    gb.add_boxed(node);
+                }
+                for &(from, fp, to, tp) in &edges {
+                    gb.connect(NodeId(from), fp, NodeId(to), tp);
+                }
+                for &(name, node, port) in &inputs {
+                    gb.input(name, NodeId(node), port);
+                }
+                for &(name, node, port) in &outputs {
+                    gb.output(name, NodeId(node), port);
+                }
+            }),
+        })
     }
 }
 
