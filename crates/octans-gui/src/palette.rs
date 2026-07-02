@@ -65,12 +65,9 @@ impl OctansApp {
         }
 
         // Apply an add after the window closure (avoids borrowing self.graph while iterating
-        // self.catalog). Append-only — safe w.r.t. NodeId indices — then recompile.
+        // self.catalog). Append-only — safe w.r.t. NodeId indices — recorded + recompiled.
         if let Some(type_id) = to_add {
-            if let Some(node) = self.catalog.make(type_id) {
-                self.graph.add_boxed(node);
-                self.rebuild_after_edit();
-            }
+            self.add_node_from_catalog(type_id);
         }
     }
 }

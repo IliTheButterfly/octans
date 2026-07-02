@@ -146,6 +146,8 @@ impl OctansApp {
         let title_font = FontId::monospace((12.0 * zoom).max(7.0));
         let mut clicked: Option<NodeId> = None;
         let mut drag: Option<(NodeId, egui::Vec2)> = None;
+        let mut drag_started: Option<NodeId> = None;
+        let mut drag_stopped: Option<NodeId> = None;
         for vn in &self.view.nodes {
             if vn.dead {
                 continue;
@@ -236,8 +238,14 @@ impl OctansApp {
                 egui::Id::new(("node", vn.id.0)),
                 egui::Sense::click_and_drag(),
             );
+            if resp.drag_started() {
+                drag_started = Some(vn.id);
+            }
             if resp.dragged() {
                 drag = Some((vn.id, resp.drag_delta()));
+            }
+            if resp.drag_stopped() {
+                drag_stopped = Some(vn.id);
             }
             if resp.clicked() {
                 clicked = Some(vn.id);
@@ -292,12 +300,30 @@ impl OctansApp {
                 Some(id)
             };
         }
-        // Apply a node drag: move it in world space and remember the manual position.
+        // Apply a node drag: move it in world space and remember the manual position. The whole
+        // drag is recorded as ONE undoable MoveNode (captured at start, pushed at stop).
+        if let Some(id) = drag_started {
+            self.drag_start = Some((id.0, self.manual_pos.get(&id.0).copied()));
+        }
         if let Some((id, d)) = drag {
             let size = self.layout.rects[id.0].size();
             let pos = self.layout.rects[id.0].min + d / zoom;
             self.manual_pos.insert(id.0, pos);
             self.layout.rects[id.0] = egui::Rect::from_min_size(pos, size);
+        }
+        if let Some(id) = drag_stopped {
+            if let Some((sid, before)) = self.drag_start.take() {
+                if sid == id.0 {
+                    let after = self.layout.rects[id.0].min;
+                    if before != Some(after) {
+                        self.push_edit(crate::history::EditAction::MoveNode {
+                            id: id.0,
+                            before: before.map(|p| (p.x, p.y)),
+                            after: (after.x, after.y),
+                        });
+                    }
+                }
+            }
         }
 
         // --- wiring: drag an output pin onto an input pin to connect; right-click an input to
@@ -365,9 +391,7 @@ impl OctansApp {
             self.try_connect(fnode, &fport, tnode, &tport);
         }
         if let Some((tnode, tport)) = disconnect {
-            if self.graph.disconnect_input(tnode, &tport) > 0 {
-                self.rebuild_after_edit();
-            }
+            self.disconnect_edit(tnode, &tport);
         }
     }
 }

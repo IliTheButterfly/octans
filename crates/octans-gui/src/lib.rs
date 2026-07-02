@@ -5,6 +5,7 @@
 //! test`/`clippy` compile but never execute — so CI never needs a display.
 
 pub mod canvas;
+pub mod history;
 pub mod inspector;
 pub mod layout;
 pub mod log_panel;
@@ -221,10 +222,22 @@ pub struct OctansApp {
     // save / load
     pub(crate) graph_path: String,
     pub(crate) io_status: Option<String>,
+
+    // undo / redo
+    pub(crate) undo_stack: Vec<history::EditAction>,
+    pub(crate) redo_stack: Vec<history::EditAction>,
+    /// A node drag in progress: `(node, its manual position before the drag)`.
+    pub(crate) drag_start: Option<(usize, Option<egui::Pos2>)>,
 }
 
 impl OctansApp {
     pub fn new(_cc: &eframe::CreationContext<'_>, kind: SceneKind) -> Self {
+        Self::from_scene(kind)
+    }
+
+    /// Construct without an eframe context (everything here is plain data) — used by `new` and by
+    /// headless tests.
+    pub fn from_scene(kind: SceneKind) -> Self {
         let scene = kind.build();
         let view = model::ViewGraph::from_graph(&scene.graph);
         let layout = layout::layout(&view);
@@ -266,6 +279,9 @@ impl OctansApp {
             param_edit: None,
             graph_path: "octans_graph.json".to_string(),
             io_status: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            drag_start: None,
         }
     }
 
@@ -334,6 +350,8 @@ impl OctansApp {
                     }
                 }
                 self.rebuild_after_edit();
+                self.undo_stack.clear();
+                self.redo_stack.clear();
                 self.io_status = Some(format!("loaded ← {}", self.graph_path));
             }
             Err(e) => self.io_status = Some(format!("load failed: {e:?}")),
@@ -366,8 +384,37 @@ impl OctansApp {
         }
     }
 
-    /// Remove a node (tombstone — keeps other NodeIds stable) and recompile.
+    /// Remove a node (tombstone — keeps other NodeIds stable), recording the edit, and recompile.
     pub(crate) fn delete_node(&mut self, id: NodeId) {
+        let Some((type_id, config)) = self
+            .graph
+            .node(id)
+            .map(|n| (n.node_type().to_string(), n.to_json()))
+        else {
+            return;
+        };
+        let edges: Vec<history::EdgeRec> = self
+            .graph
+            .edges()
+            .filter(|e| e.from == id || e.to == id)
+            .map(|e| {
+                (
+                    e.from.0,
+                    e.from_port.to_string(),
+                    e.to.0,
+                    e.to_port.to_string(),
+                )
+            })
+            .collect();
+        let pos = self.manual_pos.get(&id.0).map(|p| (p.x, p.y));
+        self.push_edit(history::EditAction::DeleteNode {
+            id: id.0,
+            type_id,
+            config,
+            edges,
+            pos,
+        });
+
         self.graph.remove_node(id);
         self.manual_pos.remove(&id.0);
         if self.selected == Some(id) {
@@ -388,8 +435,21 @@ impl OctansApp {
     ) -> bool {
         match self.graph.can_connect(from, from_port, to, to_port) {
             Ok(()) => {
+                let replaced: Vec<(usize, String)> = self
+                    .graph
+                    .edges()
+                    .filter(|e| e.to == to && e.to_port == to_port)
+                    .map(|e| (e.from.0, e.from_port.to_string()))
+                    .collect();
                 self.graph.disconnect_input(to, to_port);
                 let _ = self.graph.connect(from, from_port, to, to_port);
+                self.push_edit(history::EditAction::Connect {
+                    from: from.0,
+                    from_port: from_port.to_string(),
+                    to: to.0,
+                    to_port: to_port.to_string(),
+                    replaced,
+                });
                 self.edit_error = None;
                 self.rebuild_after_edit();
                 true
@@ -456,6 +516,8 @@ impl OctansApp {
         self.textures.clear();
         self.tune_results.clear();
         self.param_edit = None;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
     }
 
     /// Fold one tick's results into the panels' state.
@@ -504,6 +566,21 @@ impl OctansApp {
                     ui.close_menu();
                 }
             });
+            ui.separator();
+            if ui
+                .add_enabled(!self.undo_stack.is_empty(), egui::Button::new("↩"))
+                .on_hover_text("undo (Ctrl+Z)")
+                .clicked()
+            {
+                self.undo();
+            }
+            if ui
+                .add_enabled(!self.redo_stack.is_empty(), egui::Button::new("↪"))
+                .on_hover_text("redo (Ctrl+Shift+Z)")
+                .clicked()
+            {
+                self.redo();
+            }
             ui.separator();
             if ui
                 .selectable_label(self.run == RunState::Playing, "▶ Play")
@@ -621,6 +698,24 @@ impl eframe::App for OctansApp {
         if let Some(sel) = self.selected {
             if ctx.input(|i| i.key_pressed(egui::Key::Delete)) && !ctx.wants_keyboard_input() {
                 self.delete_node(sel);
+            }
+        }
+
+        // Undo / redo shortcuts (Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y).
+        if !ctx.wants_keyboard_input() {
+            let (undo_press, redo_press) = ctx.input(|i| {
+                let z = i.key_pressed(egui::Key::Z);
+                let y = i.key_pressed(egui::Key::Y);
+                let cmd = i.modifiers.command;
+                (
+                    cmd && z && !i.modifiers.shift,
+                    cmd && (y || (z && i.modifiers.shift)),
+                )
+            });
+            if undo_press {
+                self.undo();
+            } else if redo_press {
+                self.redo();
             }
         }
 

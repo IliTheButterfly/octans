@@ -134,7 +134,7 @@ impl OctansApp {
         };
         // (Re)load the editable config when the selection changes.
         if self.param_edit.as_ref().map(|(n, _)| *n) != Some(sel.0) {
-            self.param_edit = Some((sel.0, cfg));
+            self.param_edit = Some((sel.0, cfg.clone()));
         }
 
         let mut open = true;
@@ -196,10 +196,35 @@ impl OctansApp {
             return;
         }
         // Apply a parameter edit: rebuild the node from the edited config and swap it in (ports
-        // unchanged, so a light recompile preserves view/layout/selection).
+        // unchanged, so a light recompile preserves view/layout/selection). Consecutive edits to
+        // the same node coalesce into one undo step (a slider drag isn't 60 undos).
         if params_changed {
             if let Some((_, val)) = &self.param_edit {
-                if let Some(node) = self.node_registry.build(type_id, val) {
+                let after = val.clone();
+                if let Some(node) = self.node_registry.build(type_id, &after) {
+                    use crate::history::EditAction;
+                    if let Some(EditAction::ParamEdit { id, after: a, .. }) =
+                        self.undo_stack.last_mut()
+                    {
+                        if *id == sel.0 {
+                            *a = after.clone();
+                            self.redo_stack.clear();
+                        } else {
+                            self.push_edit(EditAction::ParamEdit {
+                                id: sel.0,
+                                type_id: type_id.to_string(),
+                                before: cfg.clone(),
+                                after: after.clone(),
+                            });
+                        }
+                    } else {
+                        self.push_edit(EditAction::ParamEdit {
+                            id: sel.0,
+                            type_id: type_id.to_string(),
+                            before: cfg.clone(),
+                            after: after.clone(),
+                        });
+                    }
                     self.graph.replace_node(sel, node);
                     self.recompile();
                 }
