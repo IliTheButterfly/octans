@@ -110,4 +110,10 @@ impl Registry {
     pub fn deserializer(&self, id: TypeId) -> Option<Deserializer> {
         self.types.get(id).and_then(|d| d.de)
     }
+
+    /// Iterate every registered type descriptor — e.g. for a UI's element-type dropdown when
+    /// instantiating a generic node (`Gather::new_dyn` and friends).
+    pub fn iter_types(&self) -> impl Iterator<Item = &TypeDescriptor> {
+        self.types.values()
+    }
 }

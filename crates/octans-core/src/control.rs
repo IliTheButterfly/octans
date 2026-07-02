@@ -24,8 +24,13 @@ pub struct Switch {
 
 impl Switch {
     pub fn new<T: RegisteredType>(n: usize) -> Self {
+        Self::new_dyn(T::type_spec(), n)
+    }
+
+    /// Construct with a runtime-chosen element type (see [`Gather::new_dyn`](crate::Gather::new_dyn)).
+    pub fn new_dyn(elem: TypeSpec, n: usize) -> Self {
         Self {
-            elem: T::type_spec(),
+            elem,
             in_names: (0..n).map(|i| leak(format!("in{i}"))).collect(),
         }
     }

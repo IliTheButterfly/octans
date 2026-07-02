@@ -23,8 +23,15 @@ pub struct Gather {
 
 impl Gather {
     pub fn new<T: RegisteredType>(n: usize) -> Self {
+        Self::new_dyn(T::type_spec(), n)
+    }
+
+    /// Construct with a runtime-chosen element type (no compile-time `T` — `Gather` is already
+    /// type-erased internally). This is what lets an editor/palette build one from a type picked
+    /// in a dropdown.
+    pub fn new_dyn(elem: TypeSpec, n: usize) -> Self {
         Self {
-            elem: T::type_spec(),
+            elem,
             in_names: (0..n).map(|i| leak(format!("in{i}"))).collect(),
         }
     }
@@ -73,8 +80,13 @@ pub struct Scatter {
 
 impl Scatter {
     pub fn new<T: RegisteredType>(n: usize) -> Self {
+        Self::new_dyn(T::type_spec(), n)
+    }
+
+    /// Construct with a runtime-chosen element type (see [`Gather::new_dyn`]).
+    pub fn new_dyn(elem: TypeSpec, n: usize) -> Self {
         Self {
-            elem: T::type_spec(),
+            elem,
             out_names: (0..n).map(|i| leak(format!("out{i}"))).collect(),
         }
     }
