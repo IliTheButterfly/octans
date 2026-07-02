@@ -25,15 +25,30 @@ pub(crate) fn schema_editor(ui: &mut egui::Ui, schema: &ParamSchema, value: &mut
             if !f.doc.is_empty() {
                 label.on_hover_text(f.doc);
             }
-            changed |= field_widget(ui, &f.kind, v);
+            changed |= field_widget(ui, f.name, &f.kind, v);
             ui.end_row();
         }
     });
     changed
 }
 
-fn field_widget(ui: &mut egui::Ui, kind: &ParamKind, v: &mut Value) -> bool {
+fn field_widget(ui: &mut egui::Ui, name: &str, kind: &ParamKind, v: &mut Value) -> bool {
     match kind {
+        ParamKind::Enum { options } => {
+            let cur = v.as_str().unwrap_or("").to_string();
+            let mut changed = false;
+            egui::ComboBox::from_id_salt(("param-enum", name))
+                .selected_text(cur.clone())
+                .show_ui(ui, |ui| {
+                    for opt in options {
+                        if ui.selectable_label(cur == *opt, *opt).clicked() && cur != *opt {
+                            *v = Value::String((*opt).to_string());
+                            changed = true;
+                        }
+                    }
+                });
+            changed
+        }
         ParamKind::Bool => {
             let mut b = v.as_bool().unwrap_or(false);
             let r = ui.checkbox(&mut b, "");

@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 pub mod diag;
 pub use diag::*;
+pub mod mathx;
+pub use mathx::*;
 pub mod recfile;
 pub use recfile::*;
 pub mod tracking;
@@ -94,6 +96,7 @@ pub fn register_std_factories(reg: &mut NodeRegistry) {
     reg.register_serde::<CameraSim>("octans.track.camera_sim");
     reg.register_serde::<Centroid>("octans.track.centroid");
     reg.register_serde::<ThresholdCentroid>("octans.track.threshold_centroid");
+    register_math_factories(reg);
 }
 
 /// Register the standard node types into a [`Catalog`] (for a GUI palette). Each entry is derived
@@ -144,6 +147,8 @@ pub fn register_std_catalog(cat: &mut Catalog) {
     // core structural / generic (representative type & arity)
     cat.add(|| Gather::new::<f64>(2));
     cat.add(|| Scatter::new::<f64>(2));
+    // math / logic / conversions
+    register_math_catalog(cat);
 }
 
 /// A source: emits a frame with known bright disks on a dim background. A *known* blob count

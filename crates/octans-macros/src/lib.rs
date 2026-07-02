@@ -367,13 +367,27 @@ pub fn derive_node_params(item: TokenStream) -> TokenStream {
         }
         let doc = docs.join(" ");
 
-        // #[param(min = …, max = …)] bounds.
+        // #[param(min = …, max = …)] bounds and/or #[param(options = "a,b,c")] enum variants.
         let mut min: Option<f64> = None;
         let mut max: Option<f64> = None;
+        let mut options: Option<Vec<String>> = None;
         for attr in &field.attrs {
             if attr.path().is_ident("param") {
                 let res = attr.parse_nested_meta(|meta| {
                     let lit: Lit = meta.value()?.parse()?;
+                    if meta.path.is_ident("options") {
+                        if let Lit::Str(s) = &lit {
+                            options = Some(
+                                s.value()
+                                    .split(',')
+                                    .map(|o| o.trim().to_string())
+                                    .filter(|o| !o.is_empty())
+                                    .collect(),
+                            );
+                            return Ok(());
+                        }
+                        return Err(meta.error("`options` expects a comma-separated string"));
+                    }
                     let num = match &lit {
                         Lit::Int(i) => i.base10_parse::<f64>().ok(),
                         Lit::Float(f) => f.base10_parse::<f64>().ok(),
@@ -384,7 +398,9 @@ pub fn derive_node_params(item: TokenStream) -> TokenStream {
                     } else if meta.path.is_ident("max") {
                         max = num;
                     } else {
-                        return Err(meta.error("expected `min = <number>` or `max = <number>`"));
+                        return Err(meta.error(
+                            "expected `min = <number>`, `max = <number>`, or `options = \"a,b\"`",
+                        ));
                     }
                     Ok(())
                 });
@@ -394,7 +410,13 @@ pub fn derive_node_params(item: TokenStream) -> TokenStream {
             }
         }
 
-        let kind = param_kind_for(&field.ty, min, max);
+        let kind = match &options {
+            Some(opts) => {
+                let lits = opts.iter().map(|o| quote! { #o });
+                quote! { ::octans_core::ParamKind::Enum { options: vec![ #( #lits ),* ] } }
+            }
+            None => param_kind_for(&field.ty, min, max),
+        };
         fields.push(quote! {
             ::octans_core::ParamField { name: #fname, doc: #doc, kind: #kind }
         });

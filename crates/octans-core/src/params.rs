@@ -41,6 +41,11 @@ pub enum ParamKind {
     FloatArray {
         len: usize,
     },
+    /// A `String` field restricted to one of `options` — rendered as a dropdown. Declared with
+    /// `#[param(options = "add,subtract,…")]`; this is how a Blender-style op selector works.
+    Enum {
+        options: Vec<&'static str>,
+    },
     /// Anything else — rendered by a generic JSON editor.
     Json,
 }
