@@ -57,7 +57,7 @@ pub struct BodySpec {
     pub outputs: Vec<BoundarySpec>,
 }
 
-type Factory = Box<dyn Fn(&serde_json::Value) -> Box<dyn Node>>;
+type Factory = Box<dyn Fn(&serde_json::Value) -> Box<dyn Node> + Send + Sync>;
 
 /// Maps a node-type-id to a factory that builds the node from its config JSON.
 #[derive(Default)]
@@ -73,7 +73,7 @@ impl NodeRegistry {
     pub fn register(
         &mut self,
         type_id: &str,
-        factory: impl Fn(&serde_json::Value) -> Box<dyn Node> + 'static,
+        factory: impl Fn(&serde_json::Value) -> Box<dyn Node> + Send + Sync + 'static,
     ) {
         self.factories
             .insert(type_id.to_string(), Box::new(factory));
