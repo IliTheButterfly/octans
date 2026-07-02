@@ -168,6 +168,13 @@ impl OctansApp {
                     Stroke::new(2.0, Color32::from_rgb(110, 170, 240)),
                     StrokeKind::Outside,
                 );
+            } else if self.sel_set.contains(&vn.id.0) {
+                painter.rect_stroke(
+                    r.expand(2.0),
+                    CornerRadius::same(5),
+                    Stroke::new(2.0, Color32::from_rgb(90, 200, 190)),
+                    StrokeKind::Outside,
+                );
             }
 
             let faulted = self
@@ -292,13 +299,22 @@ impl OctansApp {
             }
         }
 
-        // Apply selection after the loop (toggling off if the same node is clicked again).
+        // Apply selection after the loop. Shift-click toggles membership in the multi-selection
+        // (for capture-as-template); a plain click single-selects (inspector) and resets the set.
         if let Some(id) = clicked {
-            self.selected = if self.selected == Some(id) {
-                None
+            if ui.input(|i| i.modifiers.shift) {
+                if !self.sel_set.remove(&id.0) {
+                    self.sel_set.insert(id.0);
+                }
             } else {
-                Some(id)
-            };
+                self.sel_set.clear();
+                self.selected = if self.selected == Some(id) {
+                    None
+                } else {
+                    self.sel_set.insert(id.0);
+                    Some(id)
+                };
+            }
         }
         // Apply a node drag: move it in world space and remember the manual position. The whole
         // drag is recorded as ONE undoable MoveNode (captured at start, pushed at stop).

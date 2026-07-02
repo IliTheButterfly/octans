@@ -57,6 +57,20 @@ pub enum EditAction {
         before: Option<(f32, f32)>,
         after: (f32, f32),
     },
+    /// A group-template instantiation: several nodes + internal edges appended at once. Undo
+    /// tombstones them all; redo rebuilds each into its original slot and reconnects.
+    AddMany {
+        nodes: Vec<(usize, String, Value)>,
+        edges: Vec<EdgeRec>,
+    },
+    /// A Map/Loop placed over a named template. Redo rebuilds it from the template's BodySpec
+    /// (kept in the app's template list), so the closure-carrying node is reproducible.
+    AddComposite {
+        id: usize,
+        kind: String,
+        template: String,
+        count: usize,
+    },
 }
 
 impl OctansApp {
@@ -185,6 +199,38 @@ impl OctansApp {
                             self.manual_pos.remove(id);
                         }
                     }
+                }
+            }
+            EditAction::AddMany { nodes, edges } => {
+                if forward {
+                    for (id, type_id, config) in nodes {
+                        if let Some(node) = self.rebuild_node(type_id, config) {
+                            self.graph.replace_node(NodeId(*id), node);
+                        }
+                    }
+                    for (f, fp, t, tp) in edges {
+                        let _ = self.graph.connect(NodeId(*f), fp, NodeId(*t), tp);
+                    }
+                } else {
+                    for (id, _, _) in nodes {
+                        self.graph.remove_node(NodeId(*id));
+                        self.manual_pos.remove(id);
+                    }
+                }
+            }
+            EditAction::AddComposite {
+                id,
+                kind,
+                template,
+                count,
+            } => {
+                if forward {
+                    if let Some(node) = self.build_composite(kind, template, *count) {
+                        self.graph.replace_node(NodeId(*id), node);
+                    }
+                } else {
+                    self.graph.remove_node(NodeId(*id));
+                    self.manual_pos.remove(id);
                 }
             }
         }

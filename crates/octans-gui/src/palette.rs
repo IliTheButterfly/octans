@@ -85,6 +85,10 @@ impl OctansApp {
                 });
                 ui.separator();
 
+                // --- group templates: capture / instantiate / map / loop ---
+                self.templates_section(ui);
+                ui.separator();
+
                 // --- catalog, filtered + grouped ---
                 let filter = self.palette_filter.to_lowercase();
                 egui::ScrollArea::vertical()

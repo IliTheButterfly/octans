@@ -16,14 +16,16 @@ pub mod profiler;
 pub mod pyxis;
 pub mod scene;
 pub mod schedule;
+pub mod templates;
 
 use eframe::egui;
 use octans_core::{
-    Catalog, Diagnostic, Fault, Graph, GraphSpec, Mira, NodeId, NodeRegistry, Registry,
+    BodySpec, Catalog, Diagnostic, Fault, Graph, GraphSpec, Mira, NodeId, NodeRegistry, Registry,
     StrategyHandle, Tick, TuneResult, Value,
 };
 use scene::SceneKind;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Format a duration compactly (ms above 1ms, else µs). Shared by the profiler/schedule panels.
@@ -219,14 +221,21 @@ pub struct OctansApp {
     pub(crate) edit_error: Option<String>,
     /// Manual node positions (world top-left), overriding auto-layout where set. Keyed by NodeId.0.
     pub(crate) manual_pos: HashMap<usize, egui::Pos2>,
-    /// Serde factories, for rebuilding a node from edited config (param editing / load).
-    pub(crate) node_registry: NodeRegistry,
+    /// Serde factories, for rebuilding a node from edited config (param editing / load /
+    /// data-defined group templates, which hold a shared reference).
+    pub(crate) node_registry: Arc<NodeRegistry>,
     /// The config being edited in the inspector: `(node, json)`. Reloaded when selection changes.
     pub(crate) param_edit: Option<(usize, serde_json::Value)>,
 
     // save / load
     pub(crate) graph_path: String,
     pub(crate) io_status: Option<String>,
+
+    // structural editing: selection set + data-defined group templates
+    pub(crate) sel_set: HashSet<usize>,
+    pub(crate) templates: Vec<(String, BodySpec)>,
+    pub(crate) template_counter: usize,
+    pub(crate) loop_count: usize,
 
     // undo / redo
     pub(crate) undo_stack: Vec<history::EditAction>,
@@ -250,6 +259,7 @@ impl OctansApp {
         octans_nodes::register_std_catalog(&mut catalog);
         let mut node_registry = NodeRegistry::new();
         octans_nodes::register_std_factories(&mut node_registry);
+        let node_registry = Arc::new(node_registry);
         Self {
             graph: scene.graph,
             engine: Some(scene.engine),
@@ -287,6 +297,10 @@ impl OctansApp {
             param_edit: None,
             graph_path: "octans_graph.json".to_string(),
             io_status: None,
+            sel_set: HashSet::new(),
+            templates: Vec::new(),
+            template_counter: 0,
+            loop_count: 3,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             drag_start: None,
@@ -302,7 +316,11 @@ impl OctansApp {
             .iter()
             .map(|(i, p)| (*i, p.x, p.y))
             .collect();
-        let doc = serde_json::json!({ "graph": self.graph.to_spec(), "layout": layout });
+        let doc = serde_json::json!({
+            "graph": self.graph.to_spec(),
+            "layout": layout,
+            "templates": self.templates,
+        });
         let res = serde_json::to_string_pretty(&doc)
             .map_err(|e| e.to_string())
             .and_then(|s| std::fs::write(&self.graph_path, s).map_err(|e| e.to_string()));
@@ -357,6 +375,11 @@ impl OctansApp {
                         }
                     }
                 }
+                self.templates = doc
+                    .get("templates")
+                    .and_then(|t| serde_json::from_value(t.clone()).ok())
+                    .unwrap_or_default();
+                self.sel_set.clear();
                 self.rebuild_after_edit();
                 self.undo_stack.clear();
                 self.redo_stack.clear();
@@ -425,6 +448,7 @@ impl OctansApp {
 
         self.graph.remove_node(id);
         self.manual_pos.remove(&id.0);
+        self.sel_set.remove(&id.0);
         if self.selected == Some(id) {
             self.selected = None;
         }
@@ -526,6 +550,7 @@ impl OctansApp {
         self.param_edit = None;
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.sel_set.clear();
     }
 
     /// Fold one tick's results into the panels' state.
